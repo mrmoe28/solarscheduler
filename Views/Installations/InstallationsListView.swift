@@ -3,19 +3,28 @@ import SwiftData
 
 struct InstallationsListView: View {
     @Environment(\.viewModelContainer) private var viewModelContainer
+    @Environment(\.modelContext) private var modelContext
+    @State private var viewModel: InstallationsViewModel?
     
-    private var viewModel: InstallationsViewModel {
-        viewModelContainer?.installationsViewModel ?? InstallationsViewModel(
-            dataService: DataService(modelContext: ModelContext(for: Schema([
-                Installation.self, SolarJob.self, Customer.self, Equipment.self, Vendor.self, Contract.self
-            ])))
-        )
+    private var currentViewModel: InstallationsViewModel {
+        if let vm = viewModel {
+            return vm
+        } else {
+            if let container = viewModelContainer {
+                return container.installationsViewModel
+            } else {
+                let dataService = DataService(modelContext: modelContext)
+                let newViewModel = InstallationsViewModel(dataService: dataService)
+                viewModel = newViewModel
+                return newViewModel
+            }
+        }
     }
     
     var body: some View {
         NavigationView {
             ZStack {
-                if viewModel.isLoading {
+                if currentViewModel.isLoading {
                     ProgressView("Loading installations...")
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .background(Color(UIColor.systemBackground))
@@ -26,18 +35,18 @@ struct InstallationsListView: View {
                             HStack(spacing: 12) {
                                 FilterChip(
                                     title: "All",
-                                    isSelected: viewModel.selectedStatus == nil
+                                    isSelected: currentViewModel.selectedStatus == nil
                                 ) {
-                                    viewModel.selectedStatus = nil
+                                    currentViewModel.selectedStatus = nil
                                 }
                                 
                                 ForEach(InstallationStatus.allCases, id: \.self) { status in
                                     FilterChip(
                                         title: status.rawValue,
-                                        isSelected: viewModel.selectedStatus == status,
-                                        count: viewModel.getInstallationsCount(for: status)
+                                        isSelected: currentViewModel.selectedStatus == status,
+                                        count: currentViewModel.getInstallationsCount(for: status)
                                     ) {
-                                        viewModel.selectedStatus = viewModel.selectedStatus == status ? nil : status
+                                        currentViewModel.selectedStatus = currentViewModel.selectedStatus == status ? nil : status
                                     }
                                 }
                             }
@@ -47,10 +56,10 @@ struct InstallationsListView: View {
                         
                         // Sort Controls
                         HStack {
-                            Menu("Sort: \(sortByTitle(viewModel.sortBy))") {
-                                ForEach([InstallationSortBy.scheduledDate, .status, .crewSize], id: \.self) { sortOption in
+                            Menu("Sort: \(sortByTitle(currentViewModel.sortBy))") {
+                                ForEach([InstallationSortBy.scheduledDate, .status, .crewMembers], id: \.self) { sortOption in
                                     Button(sortByTitle(sortOption)) {
-                                        viewModel.sortBy = sortOption
+                                        currentViewModel.sortBy = sortOption
                                     }
                                 }
                             }
@@ -59,14 +68,14 @@ struct InstallationsListView: View {
                             Spacer()
                             
                             Button(action: {
-                                viewModel.sortAscending.toggle()
+                                currentViewModel.sortAscending.toggle()
                             }) {
-                                Image(systemName: viewModel.sortAscending ? "arrow.up" : "arrow.down")
+                                Image(systemName: currentViewModel.sortAscending ? "arrow.up" : "arrow.down")
                                     .foregroundColor(.secondary)
                             }
                             
                             Button("Clear Filters") {
-                                viewModel.clearFilters()
+                                currentViewModel.clearFilters()
                             }
                             .font(.caption)
                             .foregroundColor(.secondary)
@@ -76,23 +85,23 @@ struct InstallationsListView: View {
                         
                         // Installations List
                         List {
-                            ForEach(viewModel.filteredInstallations, id: \.id) { installation in
+                            ForEach(currentViewModel.filteredInstallations, id: \.id) { installation in
                                 Button(action: {
-                                    viewModel.showInstallationDetail(installation)
+                                    currentViewModel.showInstallationDetail(installation)
                                 }) {
                                     InstallationRowView(installation: installation) { newStatus in
-                                        viewModel.updateInstallationStatus(installation, to: newStatus)
+                                        currentViewModel.updateInstallationStatus(installation, to: newStatus)
                                     }
                                 }
                                 .buttonStyle(PlainButtonStyle())
                             }
                             .onDelete(perform: deleteInstallations)
                         }
-                        .searchable(text: $viewModel.searchText, prompt: "Search installations...")
+                        .searchable(text: $currentViewModel.searchText, prompt: "Search installations...")
                     }
                 }
             }
-            .navigationTitle("Schedule (\(viewModel.filteredInstallations.count))")
+            .navigationTitle("Schedule (\(currentViewModel.filteredInstallations.count))")
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Menu("Export") {
@@ -106,32 +115,32 @@ struct InstallationsListView: View {
                 }
                 
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(action: { viewModel.showAddInstallation() }) {
+                    Button(action: { currentViewModel.showAddInstallation() }) {
                         Image(systemName: "plus")
                     }
                 }
             }
-            .sheet(isPresented: $viewModel.showingAddInstallation) {
+            .sheet(isPresented: $currentViewModel.showingAddInstallation) {
                 AddInstallationView(viewModel: viewModel)
             }
-            .sheet(isPresented: $viewModel.showingInstallationDetail) {
-                if let installation = viewModel.selectedInstallation {
+            .sheet(isPresented: $currentViewModel.showingInstallationDetail) {
+                if let installation = currentViewModel.selectedInstallation {
                     InstallationDetailView(installation: installation)
                 }
             }
             .refreshable {
-                viewModel.loadData()
+                currentViewModel.loadData()
             }
             .onAppear {
                 // Load installations when view appears
-                viewModel.loadData()
+                currentViewModel.loadData()
             }
-            .alert("Error", isPresented: .constant(viewModel.errorMessage != nil)) {
+            .alert("Error", isPresented: .constant(currentViewModel.errorMessage != nil)) {
                 Button("OK") {
-                    viewModel.errorMessage = nil
+                    currentViewModel.errorMessage = nil
                 }
             } message: {
-                Text(viewModel.errorMessage ?? "")
+                Text(currentViewModel.errorMessage ?? "")
             }
         }
     }
@@ -139,7 +148,7 @@ struct InstallationsListView: View {
     private func deleteInstallations(offsets: IndexSet) {
         withAnimation {
             for index in offsets {
-                viewModel.deleteInstallation(viewModel.filteredInstallations[index])
+                currentViewModel.deleteInstallation(currentViewModel.filteredInstallations[index])
             }
         }
     }
@@ -148,7 +157,7 @@ struct InstallationsListView: View {
         switch sortBy {
         case .scheduledDate: return "Scheduled Date"
         case .status: return "Status"
-        case .crewSize: return "Crew Size"
+        case .crewMembers: return "Crew Size"
         }
     }
 }
@@ -229,91 +238,6 @@ struct InstallationRowView: View {
     }
 }
 
-struct AddInstallationView: View {
-    @Environment(\.dismiss) private var dismiss
-    @ObservedObject var viewModel: InstallationsViewModel
-    
-    var body: some View {
-        NavigationView {
-            Form {
-                Section("Job Selection") {
-                    Picker("Select Job", selection: $viewModel.newInstallationJobId) {
-                        Text("Select a job...").tag(UUID?.none)
-                        ForEach(viewModel.getAvailableJobs(), id: \.id) { job in
-                            Text("\(job.customerName) - \(job.address)")
-                                .tag(UUID?.some(job.id))
-                        }
-                    }
-                    .pickerStyle(MenuPickerStyle())
-                }
-                
-                Section("Schedule Details") {
-                    DatePicker("Scheduled Date", selection: $viewModel.newInstallationScheduledDate, displayedComponents: [.date, .hourAndMinute])
-                        .datePickerStyle(CompactDatePickerStyle())
-                    
-                    HStack {
-                        Text("Estimated Duration")
-                        Spacer()
-                        Picker("Duration", selection: $viewModel.newInstallationEstimatedDuration) {
-                            Text("4 hours").tag(4 * 3600.0)
-                            Text("6 hours").tag(6 * 3600.0)
-                            Text("8 hours").tag(8 * 3600.0)
-                            Text("10 hours").tag(10 * 3600.0)
-                            Text("12 hours").tag(12 * 3600.0)
-                        }
-                        .pickerStyle(MenuPickerStyle())
-                    }
-                    
-                    HStack {
-                        Text("Crew Size")
-                        Spacer()
-                        Picker("Crew Size", selection: $viewModel.newInstallationCrewSize) {
-                            ForEach(1...6, id: \.self) { size in
-                                Text("\(size) people").tag(size)
-                            }
-                        }
-                        .pickerStyle(MenuPickerStyle())
-                    }
-                }
-                
-                Section("Notes") {
-                    TextField("Installation notes...", text: $viewModel.newInstallationNotes, axis: .vertical)
-                        .lineLimit(3...6)
-                }
-                
-                // Validation Errors
-                if !viewModel.formErrors.isEmpty {
-                    Section("Please fix the following errors:") {
-                        ForEach(viewModel.formErrors, id: \.field) { error in
-                            Text(error.message)
-                                .foregroundColor(.red)
-                                .font(.caption)
-                        }
-                    }
-                }
-            }
-            .navigationTitle("Schedule Installation")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") {
-                        dismiss()
-                    }
-                }
-                
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Schedule") {
-                        viewModel.addInstallation()
-                        if viewModel.formErrors.isEmpty {
-                            dismiss()
-                        }
-                    }
-                    .disabled(!viewModel.validateForm())
-                }
-            }
-        }
-    }
-}
 
 // Placeholder views that need to be implemented
 struct InstallationDetailView: View {

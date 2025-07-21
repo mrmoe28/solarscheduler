@@ -1,26 +1,38 @@
 import SwiftUI
 import SwiftData
+#if canImport(UIKit)
+import UIKit
+#endif
 
 struct ContactsListView: View {
     @Environment(\.viewModelContainer) private var viewModelContainer
+    @Environment(\.modelContext) private var modelContext
     @State private var searchText = ""
     @State private var showingAddContact = false
     @State private var selectedContact: Customer?
     @State private var showingContactDetail = false
+    @State private var viewModel: CustomersViewModel?
     
-    private var viewModel: CustomersViewModel {
-        viewModelContainer?.customersViewModel ?? CustomersViewModel(
-            dataService: DataService(modelContext: ModelContext(for: Schema([
-                SolarJob.self, Customer.self, Equipment.self, Installation.self, Vendor.self, Contract.self
-            ])))
-        )
+    private var currentViewModel: CustomersViewModel {
+        if let vm = viewModel {
+            return vm
+        } else {
+            if let container = viewModelContainer {
+                return container.customersViewModel
+            } else {
+                let dataService = DataService(modelContext: modelContext)
+                let newViewModel = CustomersViewModel(dataService: dataService)
+                viewModel = newViewModel
+                return newViewModel
+            }
+        }
     }
     
     private var filteredContacts: [Customer] {
         if searchText.isEmpty {
-            return viewModel.customers
+            return currentViewModel.customers
         } else {
-            return viewModel.customers.filter { contact in
+            return currentViewModel.customers.filter { contact in
                 contact.name.localizedCaseInsensitiveContains(searchText) ||
                 contact.email.localizedCaseInsensitiveContains(searchText) ||
                 contact.phone.localizedCaseInsensitiveContains(searchText)
@@ -35,7 +47,7 @@ struct ContactsListView: View {
                     .padding(.horizontal)
                     .padding(.top, 8)
                 
-                if viewModel.isLoading {
+                if currentViewModel.isLoading {
                     LoadingView()
                 } else if filteredContacts.isEmpty {
                     EmptyContactsView(searchText: searchText) {
@@ -69,10 +81,10 @@ struct ContactsListView: View {
                 }
             }
             .refreshable {
-                viewModel.refreshData()
+                currentViewModel.refreshData()
             }
             .onAppear {
-                viewModel.refreshData()
+                currentViewModel.refreshData()
             }
         .sheet(isPresented: $showingAddContact) {
             AddContactView(viewModel: viewModel)
@@ -365,7 +377,7 @@ struct AddContactView: View {
             notes: notes
         )
         
-        viewModel.addCustomer(newCustomer)
+        currentViewModel.addCustomer(newCustomer)
         dismiss()
     }
 }
@@ -538,9 +550,15 @@ struct ContactQuickActions: View {
                     color: .green
                 ) {
                     // Handle phone call
+                    #if os(iOS)
                     if let url = URL(string: "tel:\(contact.phone)") {
                         UIApplication.shared.open(url)
                     }
+                    #elseif os(macOS)
+                    // Copy phone number to clipboard on macOS
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(contact.phone, forType: .string)
+                    #endif
                 }
                 
                 QuickActionButton(
@@ -550,7 +568,11 @@ struct ContactQuickActions: View {
                 ) {
                     // Handle email
                     if let url = URL(string: "mailto:\(contact.email)") {
+                        #if os(iOS)
                         UIApplication.shared.open(url)
+                        #elseif os(macOS)
+                        NSWorkspace.shared.open(url)
+                        #endif
                     }
                 }
                 
@@ -668,7 +690,7 @@ struct EditContactView: View {
     
     private func saveChanges() {
         // Update the contact
-        viewModel.updateCustomer(
+        currentViewModel.updateCustomer(
             contact,
             name: name,
             email: email,

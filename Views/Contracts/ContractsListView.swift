@@ -1,51 +1,69 @@
 import SwiftUI
 import SwiftData
 
+// MARK: - Search Bar
+struct SearchBar: View {
+    @Binding var text: String
+    
+    var body: some View {
+        HStack {
+            Image(systemName: "magnifyingglass")
+                .foregroundColor(.secondary)
+            
+            TextField("Search...", text: $text)
+                .textFieldStyle(PlainTextFieldStyle())
+            
+            if !text.isEmpty {
+                Button(action: { text = "" }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
+        .padding(8)
+        .background(Color(.systemGray6))
+        .cornerRadius(10)
+    }
+}
+
 struct ContractsListView: View {
-    @Environment(\.viewModelContainer) private var viewModelContainer
+    @Environment(\.modelContext) private var modelContext
+    @Query private var contracts: [Contract]
     @State private var searchText = ""
     @State private var selectedFilter: ContractFilter = .all
     @State private var showingAddContract = false
     @State private var selectedContract: Contract?
     @State private var showingContractDetail = false
     
-    private var viewModel: ContractsViewModel {
-        viewModelContainer?.contractsViewModel ?? ContractsViewModel(
-            dataService: DataService(modelContext: ModelContext(for: Schema([
-                SolarJob.self, Customer.self, Equipment.self, Installation.self, Vendor.self, Contract.self
-            ])))
-        )
-    }
-    
     private var filteredContracts: [Contract] {
-        var contracts = viewModel.contracts
+        var result = contracts
         
         // Apply status filter
         switch selectedFilter {
         case .all:
             break
         case .draft:
-            contracts = contracts.filter { $0.status == .draft }
+            result = result.filter { $0.status == .draft }
         case .pending:
-            contracts = contracts.filter { $0.status == .pending }
+            result = result.filter { $0.status == .pendingSignature }
         case .active:
-            contracts = contracts.filter { $0.status == .active }
+            result = result.filter { $0.status == .active }
         case .completed:
-            contracts = contracts.filter { $0.status == .completed }
+            result = result.filter { $0.status == .completed }
         case .cancelled:
-            contracts = contracts.filter { $0.status == .cancelled }
+            result = result.filter { $0.status == .cancelled }
         }
         
         // Apply search filter
         if !searchText.isEmpty {
-            contracts = contracts.filter { contract in
+            result = result.filter { contract in
                 contract.title.localizedCaseInsensitiveContains(searchText) ||
-                contract.customerName.localizedCaseInsensitiveContains(searchText) ||
+                (contract.customer?.name ?? "").localizedCaseInsensitiveContains(searchText) ||
                 contract.contractNumber.localizedCaseInsensitiveContains(searchText)
             }
         }
         
-        return contracts.sorted { $0.createdDate > $1.createdDate }
+        return result.sorted { $0.createdDate > $1.createdDate }
     }
     
     var body: some View {
@@ -58,9 +76,7 @@ struct ContractsListView: View {
                 .padding(.horizontal)
                 .padding(.top, 8)
                 
-                if viewModel.isLoading {
-                    ContractLoadingView()
-                } else if filteredContracts.isEmpty {
+                if filteredContracts.isEmpty {
                     EmptyContractsView(
                         searchText: searchText,
                         selectedFilter: selectedFilter
@@ -90,21 +106,13 @@ struct ContractsListView: View {
                             .font(.title2)
                             .foregroundColor(.orange)
                     }
-                    .buttonStyle(BouncyButtonStyle())
-                    .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.5), trigger: showingAddContract)
                 }
             }
-            .refreshable {
-                viewModel.refreshData()
-            }
-            .onAppear {
-                viewModel.refreshData()
-            }
         .sheet(isPresented: $showingAddContract) {
-            AddContractView(viewModel: viewModel)
+            AddContractView()
         }
         .sheet(item: $selectedContract) { contract in
-            ContractDetailView(contract: contract, viewModel: viewModel)
+            ContractDetailView(contract: contract)
         }
     }
 }
@@ -179,8 +187,6 @@ struct FilterChip: View {
                         )
                 )
         }
-        .buttonStyle(BouncyButtonStyle())
-        .sensoryFeedback(.selection, trigger: isSelected)
     }
 }
 
@@ -240,7 +246,6 @@ struct EmptyContractsView: View {
                     .background(Color.orange)
                     .cornerRadius(25)
                 }
-                .buttonStyle(BouncyButtonStyle())
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -276,6 +281,10 @@ struct ContractsList: View {
 
 struct ContractRowView: View {
     let contract: Contract
+    @State private var showingDetail = false
+    @State private var showingDeleteAlert = false
+    @State private var showShareSheet = false
+    @Environment(\.modelContext) private var modelContext
     
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -286,14 +295,34 @@ struct ContractRowView: View {
                         .font(.headline)
                         .foregroundColor(.primary)
                     
-                    Text(contract.customerName)
+                    Text(contract.customer?.name ?? "Unknown Customer")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                 }
                 
                 Spacer()
                 
-                ContractStatusBadge(status: contract.status)
+                // Action buttons
+                HStack(spacing: 12) {
+                    Button(action: { showingDetail = true }) {
+                        Image(systemName: "eye")
+                            .font(.system(size: 18))
+                            .foregroundColor(.blue)
+                    }
+                    
+                    Button(action: { showShareSheet = true }) {
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.system(size: 18))
+                            .foregroundColor(.orange)
+                    }
+                    
+                    Button(action: { showingDeleteAlert = true }) {
+                        Image(systemName: "trash")
+                            .font(.system(size: 18))
+                            .foregroundColor(.red)
+                    }
+                }
+                .buttonStyle(BorderlessButtonStyle())
             }
             
             // Details
@@ -307,7 +336,7 @@ struct ContractRowView: View {
                 
                 ContractDetailItem(
                     icon: "dollarsign.circle",
-                    value: "$\(Int(contract.totalValue))"
+                    value: "$\(Int(contract.totalAmount))"
                 )
                 
                 Spacer()
@@ -319,11 +348,49 @@ struct ContractRowView: View {
             }
             .font(.caption)
             .foregroundColor(.secondary)
+            
+            // Status badge
+            HStack {
+                Spacer()
+                ContractStatusBadge(status: contract.status)
+            }
         }
         .padding()
-        .background(Color(UIColor.systemBackground))
+        .background(Color(.systemBackground))
         .cornerRadius(12)
         .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
+        .sheet(isPresented: $showingDetail) {
+            ContractDetailView(contract: contract)
+        }
+        .alert("Delete Contract", isPresented: $showingDeleteAlert) {
+            Button("Cancel", role: .cancel) { }
+            Button("Delete", role: .destructive) {
+                deleteContract()
+            }
+        } message: {
+            Text("Are you sure you want to delete this contract?")
+        }
+        #if os(iOS)
+        .sheet(isPresented: $showShareSheet) {
+            ActivityViewController(items: [createContractShareText()])
+        }
+        #endif
+    }
+    
+    private func deleteContract() {
+        modelContext.delete(contract)
+        try? modelContext.save()
+    }
+    
+    private func createContractShareText() -> String {
+        """
+        Contract: \(contract.title)
+        Contract #: \(contract.contractNumber)
+        Customer: \(contract.customer?.name ?? "Unknown")
+        Total Amount: $\(Int(contract.totalAmount))
+        Status: \(contract.status.rawValue)
+        Created: \(contract.createdDate.formatted())
+        """
     }
 }
 
@@ -350,7 +417,7 @@ struct ContractStatusBadge: View {
             .foregroundColor(.white)
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
-            .background(status.color)
+            .background(Color(status.color))
             .cornerRadius(8)
     }
 }
@@ -358,13 +425,14 @@ struct ContractStatusBadge: View {
 // MARK: - Add Contract View
 
 struct AddContractView: View {
-    let viewModel: ContractsViewModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
+    @Query private var customers: [Customer]
     
     @State private var title = ""
-    @State private var customerName = ""
+    @State private var selectedCustomer: Customer?
     @State private var contractNumber = ""
-    @State private var totalValue = ""
+    @State private var totalAmount = ""
     @State private var description = ""
     @State private var startDate = Date()
     @State private var endDate = Date().addingTimeInterval(30 * 24 * 60 * 60) // 30 days from now
@@ -374,9 +442,16 @@ struct AddContractView: View {
             Form {
                 Section("Contract Details") {
                     TextField("Contract Title", text: $title)
-                    TextField("Customer Name", text: $customerName)
+                    
+                    Picker("Customer", selection: $selectedCustomer) {
+                        Text("Select Customer").tag(nil as Customer?)
+                        ForEach(customers) { customer in
+                            Text(customer.name).tag(customer as Customer?)
+                        }
+                    }
+                    
                     TextField("Contract Number", text: $contractNumber)
-                    TextField("Total Value", text: $totalValue)
+                    TextField("Total Amount", text: $totalAmount)
                         .keyboardType(.decimalPad)
                 }
                 
@@ -403,28 +478,34 @@ struct AddContractView: View {
                     Button("Create") {
                         createContract()
                     }
-                    .disabled(title.isEmpty || customerName.isEmpty)
-                    .sensoryFeedback(.success, trigger: !(title.isEmpty || customerName.isEmpty))
+                    .disabled(title.isEmpty || selectedCustomer == nil)
                 }
             }
         }
     }
     
     private func createContract() {
-        let value = Double(totalValue) ?? 0.0
+        let value = Double(totalAmount) ?? 0.0
         
         let newContract = Contract(
-            title: title,
-            customerName: customerName,
             contractNumber: contractNumber.isEmpty ? generateContractNumber() : contractNumber,
-            totalValue: value,
-            description: description,
-            startDate: startDate,
-            endDate: endDate,
-            status: .draft
+            title: title,
+            contractDescription: description,
+            totalAmount: value,
+            status: .draft,
+            terms: "",
+            paymentSchedule: ""
         )
         
-        viewModel.addContract(newContract)
+        newContract.startDate = startDate
+        newContract.completionDate = endDate
+        
+        if let customer = selectedCustomer {
+            newContract.customer = customer
+        }
+        
+        modelContext.insert(newContract)
+        try? modelContext.save()
         dismiss()
     }
     
@@ -440,8 +521,7 @@ struct AddContractView: View {
 // MARK: - Contract Detail View
 
 struct ContractDetailView: View {
-    let contract: Contract
-    let viewModel: ContractsViewModel
+    @Bindable var contract: Contract
     @Environment(\.dismiss) private var dismiss
     @State private var showingEditView = false
     
@@ -459,12 +539,12 @@ struct ContractDetailView: View {
                     ContractFinancialSection(contract: contract)
                     
                     // Description
-                    if !contract.description.isEmpty {
+                    if !contract.contractDescription.isEmpty {
                         ContractDescriptionSection(contract: contract)
                     }
                     
                     // Actions
-                    ContractActionsSection(contract: contract, viewModel: viewModel)
+                    ContractActionsSection(contract: contract)
                 }
                 .padding()
             }
@@ -485,7 +565,7 @@ struct ContractDetailView: View {
             }
         }
         .sheet(isPresented: $showingEditView) {
-            EditContractView(contract: contract, viewModel: viewModel)
+            EditContractView(contract: contract)
         }
     }
 }
@@ -507,7 +587,7 @@ struct ContractDetailHeader: View {
                 ContractStatusBadge(status: contract.status)
             }
             
-            Text(contract.customerName)
+            Text(contract.customer?.name ?? "Unknown Customer")
                 .font(.headline)
                 .foregroundColor(.secondary)
             
@@ -530,7 +610,7 @@ struct ContractStatusSection: View {
                     Text("Start Date")
                         .font(.caption)
                         .foregroundColor(.secondary)
-                    Text(contract.startDate.formatted(date: .abbreviated, time: .omitted))
+                    Text(contract.startDate?.formatted(date: .abbreviated, time: .omitted) ?? "Not set")
                         .font(.body)
                         .fontWeight(.medium)
                 }
@@ -538,16 +618,16 @@ struct ContractStatusSection: View {
                 Spacer()
                 
                 VStack(alignment: .trailing) {
-                    Text("End Date")
+                    Text("Completion Date")
                         .font(.caption)
                         .foregroundColor(.secondary)
-                    Text(contract.endDate.formatted(date: .abbreviated, time: .omitted))
+                    Text(contract.completionDate?.formatted(date: .abbreviated, time: .omitted) ?? "Not set")
                         .font(.body)
                         .fontWeight(.medium)
                 }
             }
             .padding()
-            .background(Color(UIColor.systemGray6))
+            .background(Color(.systemGray6))
             .cornerRadius(12)
         }
     }
@@ -568,7 +648,7 @@ struct ContractFinancialSection: View {
                     
                     Spacer()
                     
-                    Text("$\(Int(contract.totalValue))")
+                    Text("$\(Int(contract.totalAmount))")
                         .font(.title3)
                         .fontWeight(.bold)
                         .foregroundColor(.green)
@@ -585,7 +665,7 @@ struct ContractFinancialSection: View {
                         Text("$\(Int(contract.paidAmount))")
                             .font(.body)
                             .fontWeight(.semibold)
-                            .foregroundColor(.blue)
+                            .foregroundColor(Color.blue)
                     }
                     
                     HStack {
@@ -595,7 +675,7 @@ struct ContractFinancialSection: View {
                         
                         Spacer()
                         
-                        Text("$\(Int(contract.totalValue - contract.paidAmount))")
+                        Text("$\(Int(contract.totalAmount - contract.paidAmount))")
                             .font(.body)
                             .fontWeight(.semibold)
                             .foregroundColor(.orange)
@@ -603,7 +683,7 @@ struct ContractFinancialSection: View {
                 }
             }
             .padding()
-            .background(Color(UIColor.systemGray6))
+            .background(Color(.systemGray6))
             .cornerRadius(12)
         }
     }
@@ -616,19 +696,19 @@ struct ContractDescriptionSection: View {
         VStack(alignment: .leading, spacing: 16) {
             SectionHeader(title: "Description")
             
-            Text(contract.description)
+            Text(contract.contractDescription)
                 .font(.body)
                 .foregroundColor(.primary)
                 .padding()
-                .background(Color(UIColor.systemGray6))
+                .background(Color(.systemGray6))
                 .cornerRadius(12)
         }
     }
 }
 
 struct ContractActionsSection: View {
-    let contract: Contract
-    let viewModel: ContractsViewModel
+    @Bindable var contract: Contract
+    @Environment(\.modelContext) private var modelContext
     
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -641,18 +721,20 @@ struct ContractActionsSection: View {
                         icon: "paperplane.fill",
                         color: .blue
                     ) {
-                        viewModel.updateContractStatus(contract, status: .pending)
+                        contract.status = .pendingSignature
+                        try? modelContext.save()
                     }
                 }
                 
-                if contract.status == .pending {
+                if contract.status == .pendingSignature {
                     HStack(spacing: 12) {
                         ActionButton(
                             title: "Approve",
                             icon: "checkmark.circle.fill",
                             color: .green
                         ) {
-                            viewModel.updateContractStatus(contract, status: .active)
+                            contract.status = .active
+                            try? modelContext.save()
                         }
                         
                         ActionButton(
@@ -660,7 +742,8 @@ struct ContractActionsSection: View {
                             icon: "xmark.circle.fill",
                             color: .red
                         ) {
-                            viewModel.updateContractStatus(contract, status: .cancelled)
+                            contract.status = .cancelled
+                            try? modelContext.save()
                         }
                     }
                 }
@@ -671,7 +754,8 @@ struct ContractActionsSection: View {
                         icon: "flag.checkered.fill",
                         color: .green
                     ) {
-                        viewModel.updateContractStatus(contract, status: .completed)
+                        contract.status = .completed
+                        try? modelContext.save()
                     }
                 }
                 
@@ -707,36 +791,44 @@ struct ActionButton: View {
             .background(color)
             .cornerRadius(12)
         }
-        .buttonStyle(BouncyButtonStyle())
-        .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.5), trigger: UUID())
+    }
+}
+
+struct SectionHeader: View {
+    let title: String
+    
+    var body: some View {
+        Text(title)
+            .font(.headline)
+            .foregroundColor(.primary)
     }
 }
 
 // MARK: - Edit Contract View
 
 struct EditContractView: View {
-    let contract: Contract
-    let viewModel: ContractsViewModel
+    @Bindable var contract: Contract
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
+    @Query private var customers: [Customer]
     
     @State private var title: String
-    @State private var customerName: String
+    @State private var selectedCustomer: Customer?
     @State private var contractNumber: String
-    @State private var totalValue: String
+    @State private var totalAmount: String
     @State private var description: String
-    @State private var startDate: Date
-    @State private var endDate: Date
+    @State private var startDate: Date?
+    @State private var completionDate: Date?
     
-    init(contract: Contract, viewModel: ContractsViewModel) {
+    init(contract: Contract) {
         self.contract = contract
-        self.viewModel = viewModel
         self._title = State(initialValue: contract.title)
-        self._customerName = State(initialValue: contract.customerName)
+        self._selectedCustomer = State(initialValue: contract.customer)
         self._contractNumber = State(initialValue: contract.contractNumber)
-        self._totalValue = State(initialValue: String(Int(contract.totalValue)))
-        self._description = State(initialValue: contract.description)
+        self._totalAmount = State(initialValue: String(Int(contract.totalAmount)))
+        self._description = State(initialValue: contract.contractDescription)
         self._startDate = State(initialValue: contract.startDate)
-        self._endDate = State(initialValue: contract.endDate)
+        self._completionDate = State(initialValue: contract.completionDate)
     }
     
     var body: some View {
@@ -744,15 +836,28 @@ struct EditContractView: View {
             Form {
                 Section("Contract Details") {
                     TextField("Contract Title", text: $title)
-                    TextField("Customer Name", text: $customerName)
+                    
+                    Picker("Customer", selection: $selectedCustomer) {
+                        Text("Select Customer").tag(nil as Customer?)
+                        ForEach(customers) { customer in
+                            Text(customer.name).tag(customer as Customer?)
+                        }
+                    }
+                    
                     TextField("Contract Number", text: $contractNumber)
-                    TextField("Total Value", text: $totalValue)
+                    TextField("Total Amount", text: $totalAmount)
                         .keyboardType(.decimalPad)
                 }
                 
                 Section("Timeline") {
-                    DatePicker("Start Date", selection: $startDate, displayedComponents: .date)
-                    DatePicker("End Date", selection: $endDate, displayedComponents: .date)
+                    DatePicker("Start Date", selection: Binding(
+                        get: { startDate ?? Date() },
+                        set: { startDate = $0 }
+                    ), displayedComponents: .date)
+                    DatePicker("Completion Date", selection: Binding(
+                        get: { completionDate ?? Date() },
+                        set: { completionDate = $0 }
+                    ), displayedComponents: .date)
                 }
                 
                 Section("Description") {
@@ -773,125 +878,25 @@ struct EditContractView: View {
                     Button("Save") {
                         saveChanges()
                     }
-                    .disabled(title.isEmpty || customerName.isEmpty)
+                    .disabled(title.isEmpty || selectedCustomer == nil)
                 }
             }
         }
     }
     
     private func saveChanges() {
-        let value = Double(totalValue) ?? 0.0
+        let value = Double(totalAmount) ?? 0.0
         
-        viewModel.updateContract(
-            contract,
-            title: title,
-            customerName: customerName,
-            contractNumber: contractNumber,
-            totalValue: value,
-            description: description,
-            startDate: startDate,
-            endDate: endDate
-        )
+        contract.title = title
+        contract.customer = selectedCustomer
+        contract.contractNumber = contractNumber
+        contract.totalAmount = value
+        contract.contractDescription = description
+        contract.startDate = startDate
+        contract.completionDate = completionDate
         
+        try? modelContext.save()
         dismiss()
-    }
-}
-
-// MARK: - Contracts ViewModel
-
-class ContractsViewModel: ObservableObject {
-    @Published var contracts: [Contract] = []
-    @Published var isLoading = false
-    @Published var errorMessage: String?
-    
-    private let dataService: DataService
-    
-    init(dataService: DataService) {
-        self.dataService = dataService
-        loadContracts()
-    }
-    
-    func refreshData() {
-        loadContracts()
-    }
-    
-    private func loadContracts() {
-        isLoading = true
-        
-        // Simulate loading with mock data
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-            self.contracts = self.generateMockContracts()
-            self.isLoading = false
-        }
-    }
-    
-    func addContract(_ contract: Contract) {
-        contracts.append(contract)
-    }
-    
-    func updateContract(
-        _ contract: Contract,
-        title: String,
-        customerName: String,
-        contractNumber: String,
-        totalValue: Double,
-        description: String,
-        startDate: Date,
-        endDate: Date
-    ) {
-        if let index = contracts.firstIndex(where: { $0.id == contract.id }) {
-            contracts[index].title = title
-            contracts[index].customerName = customerName
-            contracts[index].contractNumber = contractNumber
-            contracts[index].totalValue = totalValue
-            contracts[index].description = description
-            contracts[index].startDate = startDate
-            contracts[index].endDate = endDate
-        }
-    }
-    
-    func updateContractStatus(_ contract: Contract, status: ContractStatus) {
-        if let index = contracts.firstIndex(where: { $0.id == contract.id }) {
-            contracts[index].status = status
-        }
-    }
-    
-    private func generateMockContracts() -> [Contract] {
-        [
-            Contract(
-                title: "Residential Solar Installation - Johnson",
-                customerName: "Michael Johnson",
-                contractNumber: "CTR-20250719-1001",
-                totalValue: 25000.0,
-                description: "Complete residential solar panel installation including 20 panels, inverter, and electrical work.",
-                startDate: Date(),
-                endDate: Date().addingTimeInterval(45 * 24 * 60 * 60),
-                status: .active,
-                paidAmount: 12500.0
-            ),
-            Contract(
-                title: "Commercial Solar Array - ABC Corp",
-                customerName: "ABC Corporation",
-                contractNumber: "CTR-20250718-1002",
-                totalValue: 85000.0,
-                description: "Large-scale commercial solar installation for warehouse facility.",
-                startDate: Date().addingTimeInterval(-7 * 24 * 60 * 60),
-                endDate: Date().addingTimeInterval(60 * 24 * 60 * 60),
-                status: .pending,
-                paidAmount: 0.0
-            ),
-            Contract(
-                title: "Solar Maintenance Agreement - Smith",
-                customerName: "Sarah Smith",
-                contractNumber: "CTR-20250717-1003",
-                totalValue: 5000.0,
-                description: "Annual maintenance and monitoring service agreement.",
-                startDate: Date().addingTimeInterval(-30 * 24 * 60 * 60),
-                endDate: Date().addingTimeInterval(335 * 24 * 60 * 60),
-                status: .completed,
-                paidAmount: 5000.0
-            )
-        ]
     }
 }
 

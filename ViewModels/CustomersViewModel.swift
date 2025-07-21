@@ -2,10 +2,11 @@ import Foundation
 import SwiftUI
 
 @Observable
-class CustomersViewModel {
+class CustomersViewModel: ObservableObject {
     private let dataService: DataService
     private let validationService: ValidationService
     private let notificationService: NotificationService
+    private let userSession: UserSession
     
     // Data
     var customers: [Customer] = []
@@ -14,26 +15,10 @@ class CustomersViewModel {
     // UI State
     var isLoading = false
     var errorMessage: String?
-    var searchText = "" {
-        didSet {
-            applyFilters()
-        }
-    }
-    var selectedLeadStatus: LeadStatus? {
-        didSet {
-            applyFilters()
-        }
-    }
-    var sortBy: CustomerSortBy = .name {
-        didSet {
-            applyFilters()
-        }
-    }
-    var sortAscending = true {
-        didSet {
-            applyFilters()
-        }
-    }
+    var searchText = ""
+    var selectedLeadStatus: LeadStatus?
+    var sortBy: CustomerSortBy = .name
+    var sortAscending = true
     
     // Form State
     var showingAddCustomer = false
@@ -49,11 +34,16 @@ class CustomersViewModel {
     var newCustomerNotes = ""
     var formErrors: [ValidationService.ValidationError] = []
     
-    init(dataService: DataService, validationService: ValidationService = .shared, notificationService: NotificationService = .shared) {
+    init(dataService: DataService, validationService: ValidationService = .shared, notificationService: NotificationService = .shared, userSession: UserSession = .shared) {
         self.dataService = dataService
         self.validationService = validationService
         self.notificationService = notificationService
+        self.userSession = userSession
         loadCustomers()
+    }
+    
+    private var currentUser: User? {
+        userSession.currentUser
     }
     
     // MARK: - Data Loading
@@ -63,8 +53,15 @@ class CustomersViewModel {
             isLoading = true
             errorMessage = nil
             
+            guard let user = currentUser else {
+                errorMessage = "No user signed in"
+                isLoading = false
+                return
+            }
+            
             do {
                 customers = try dataService.fetchCustomers(
+                    for: user,
                     sortBy: sortBy,
                     ascending: sortAscending
                 )
@@ -125,13 +122,19 @@ class CustomersViewModel {
             return
         }
         
+        guard let user = currentUser else {
+            errorMessage = "No user signed in"
+            return
+        }
+        
         Task { @MainActor in
             do {
                 let customer = try dataService.createCustomer(
                     name: newCustomerName,
                     email: newCustomerEmail,
                     phone: newCustomerPhone,
-                    address: newCustomerAddress
+                    address: newCustomerAddress,
+                    user: user
                 )
                 
                 customer.leadStatus = newCustomerLeadStatus
@@ -202,11 +205,16 @@ class CustomersViewModel {
     
     func searchCustomers(_ query: String) {
         Task { @MainActor in
+            guard let user = currentUser else {
+                errorMessage = "No user signed in"
+                return
+            }
+            
             do {
                 if query.isEmpty {
                     loadCustomers()
                 } else {
-                    customers = try dataService.searchCustomers(query: query)
+                    customers = try dataService.searchCustomers(for: user, query: query)
                     applyFilters()
                 }
             } catch {
@@ -221,6 +229,36 @@ class CustomersViewModel {
         sortBy = .name
         sortAscending = true
         applyFilters()
+    }
+    
+    // MARK: - Manual Filter Updates
+    
+    func updateSearchText(_ text: String) {
+        searchText = text
+        Task { @MainActor in
+            applyFilters()
+        }
+    }
+    
+    func updateSelectedLeadStatus(_ status: LeadStatus?) {
+        selectedLeadStatus = status
+        Task { @MainActor in
+            applyFilters()
+        }
+    }
+    
+    func updateSortBy(_ sort: CustomerSortBy) {
+        sortBy = sort
+        Task { @MainActor in
+            applyFilters()
+        }
+    }
+    
+    func updateSortAscending(_ ascending: Bool) {
+        sortAscending = ascending
+        Task { @MainActor in
+            applyFilters()
+        }
     }
     
     func getCustomersCount(for leadStatus: LeadStatus) -> Int {
@@ -314,11 +352,11 @@ class CustomersViewModel {
     
     func getTopCustomersByRevenue() -> [Customer] {
         return customers.compactMap { customer in
-            let totalRevenue = customer.jobs?.reduce(0) { $0 + $1.estimatedRevenue } ?? 0
+            let totalRevenue = customer.jobs.reduce(0) { $0 + $1.estimatedRevenue }
             return totalRevenue > 0 ? customer : nil
         }.sorted { customer1, customer2 in
-            let revenue1 = customer1.jobs?.reduce(0) { $0 + $1.estimatedRevenue } ?? 0
-            let revenue2 = customer2.jobs?.reduce(0) { $0 + $1.estimatedRevenue } ?? 0
+            let revenue1 = customer1.jobs.reduce(0) { $0 + $1.estimatedRevenue }
+            let revenue2 = customer2.jobs.reduce(0) { $0 + $1.estimatedRevenue }
             return revenue1 > revenue2
         }
     }
@@ -327,20 +365,21 @@ class CustomersViewModel {
     
     func canDeleteCustomer(_ customer: Customer) -> Bool {
         // Don't allow deletion if customer has active jobs
-        guard let jobs = customer.jobs else { return true }
+        let jobs = customer.jobs
+        guard !jobs.isEmpty else { return true }
         return !jobs.contains { $0.status == .inProgress || $0.status == .pending }
     }
     
     func getCustomerTotalRevenue(_ customer: Customer) -> Double {
-        return customer.jobs?.reduce(0) { $0 + $1.estimatedRevenue } ?? 0
+        return customer.jobs.reduce(0) { $0 + $1.estimatedRevenue }
     }
     
     func getCustomerJobCount(_ customer: Customer) -> Int {
-        return customer.jobs?.count ?? 0
+        return customer.jobs.count
     }
     
     func getCustomerActiveJobCount(_ customer: Customer) -> Int {
-        return customer.jobs?.filter { $0.status == .inProgress || $0.status == .pending }.count ?? 0
+        return customer.jobs.filter { $0.status == .inProgress || $0.status == .pending }.count
     }
     
     // MARK: - Export

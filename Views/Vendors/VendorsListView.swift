@@ -20,8 +20,7 @@ struct VendorsListView: View {
     }
     
     var body: some View {
-        NavigationView {
-            List {
+        List {
                 ForEach(filteredVendors, id: \.id) { vendor in
                     VendorRowView(vendor: vendor)
                 }
@@ -39,7 +38,6 @@ struct VendorsListView: View {
             .sheet(isPresented: $showingAddVendor) {
                 AddVendorView()
             }
-        }
     }
     
     private func deleteVendors(offsets: IndexSet) {
@@ -111,21 +109,103 @@ struct VendorRowView: View {
 }
 
 struct AddVendorView: View {
+    @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
+    
+    @State private var name = ""
+    @State private var contactEmail = ""
+    @State private var contactPhone = ""
+    @State private var address = ""
+    @State private var website = ""
+    @State private var notes = ""
+    @State private var selectedSpecialties: Set<VendorSpecialty> = []
     
     var body: some View {
         NavigationView {
-            Text("Add New Vendor")
-                .navigationTitle("New Vendor")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .navigationBarLeading) {
-                        Button("Cancel") {
-                            dismiss()
+            Form {
+                Section("Company Information") {
+                    TextField("Company Name", text: $name)
+                    TextField("Website", text: $website)
+                        .keyboardType(.URL)
+                        .textInputAutocapitalization(.never)
+                }
+                
+                Section("Contact Information") {
+                    TextField("Email", text: $contactEmail)
+                        .keyboardType(.emailAddress)
+                        .textInputAutocapitalization(.never)
+                    TextField("Phone", text: $contactPhone)
+                        .keyboardType(.phonePad)
+                    TextField("Address", text: $address, axis: .vertical)
+                        .lineLimit(2...4)
+                }
+                
+                Section("Specialties") {
+                    ForEach(VendorSpecialty.allCases, id: \.self) { specialty in
+                        HStack {
+                            Text(specialty.rawValue)
+                            Spacer()
+                            if selectedSpecialties.contains(specialty) {
+                                Image(systemName: "checkmark")
+                                    .foregroundColor(Color.blue)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            if selectedSpecialties.contains(specialty) {
+                                selectedSpecialties.remove(specialty)
+                            } else {
+                                selectedSpecialties.insert(specialty)
+                            }
                         }
                     }
                 }
+                
+                Section("Additional Information") {
+                    TextField("Notes", text: $notes, axis: .vertical)
+                        .lineLimit(3...6)
+                }
+            }
+            .navigationTitle("New Vendor")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") { dismiss() }
+                }
+                
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Save") {
+                        saveVendor()
+                    }
+                    .fontWeight(.semibold)
+                    .disabled(!isFormValid)
+                }
+            }
         }
+    }
+    
+    private var isFormValid: Bool {
+        !name.isEmpty && !contactEmail.isEmpty
+    }
+    
+    private func saveVendor() {
+        let vendor = Vendor(
+            name: name,
+            contactEmail: contactEmail,
+            contactPhone: contactPhone,
+            address: address,
+            specialties: Array(selectedSpecialties),
+            rating: 0.0,
+            notes: notes,
+            website: website,
+            emergencyContact: "",
+            insuranceDetails: "",
+            licenseNumber: ""
+        )
+        
+        modelContext.insert(vendor)
+        try? modelContext.save()
+        dismiss()
     }
 }
 

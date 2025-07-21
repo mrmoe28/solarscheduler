@@ -13,6 +13,7 @@ enum TimeFilter: String, CaseIterable {
 class DashboardViewModel {
     private let dataService: DataService
     private let notificationService: NotificationService
+    private let userSession: UserSession
     
     // Dashboard metrics
     var totalJobs: Int = 0
@@ -34,10 +35,15 @@ class DashboardViewModel {
     var alerts: [DashboardAlert] = []
     var currentTimeFilter: TimeFilter = .today
     
-    init(dataService: DataService, notificationService: NotificationService = .shared) {
+    init(dataService: DataService, notificationService: NotificationService = .shared, userSession: UserSession = .shared) {
         self.dataService = dataService
         self.notificationService = notificationService
+        self.userSession = userSession
         refreshData()
+    }
+    
+    private var currentUser: User? {
+        userSession.currentUser
     }
     
     func refreshData() {
@@ -45,10 +51,16 @@ class DashboardViewModel {
             isLoading = true
             errorMessage = nil
             
+            guard let user = currentUser else {
+                errorMessage = "No user signed in"
+                isLoading = false
+                return
+            }
+            
             do {
                 // Get comprehensive statistics
-                let jobStats = try dataService.getJobStatistics()
-                let equipmentStats = try dataService.getEquipmentStatistics()
+                let jobStats = try dataService.getJobStatistics(for: user)
+                let equipmentStats = try dataService.getEquipmentStatistics(for: user)
                 
                 // Update metrics
                 totalJobs = jobStats.totalJobs
@@ -56,12 +68,13 @@ class DashboardViewModel {
                 completedJobs = jobStats.completedJobs
                 totalRevenue = jobStats.totalRevenue
                 pendingRevenue = jobStats.pendingRevenue
-                totalCustomers = try dataService.fetchCustomers().count
+                totalCustomers = try dataService.fetchCustomers(for: user).count
                 lowStockItemsCount = equipmentStats.lowStockCount
                 
                 // Update recent activity
-                recentJobs = try dataService.fetchJobs(limit: 5)
+                recentJobs = try dataService.fetchJobs(for: user, limit: 5)
                 upcomingInstallations = try dataService.fetchInstallations(
+                    for: user,
                     startDate: Date(),
                     sortBy: .scheduledDate,
                     ascending: true
@@ -119,7 +132,7 @@ class DashboardViewModel {
             alerts.append(DashboardAlert(
                 type: .milestone,
                 title: "Revenue Milestone",
-                message: "Congratulations! You've reached $\(totalRevenue.safeValue, specifier: "%.0f") in revenue",
+                message: "Congratulations! You've reached $\(String(format: "%.0f", totalRevenue.safeValue)) in revenue",
                 priority: .medium
             ))
         }

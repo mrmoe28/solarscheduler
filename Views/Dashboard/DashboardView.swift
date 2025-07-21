@@ -4,159 +4,152 @@ import SwiftData
 struct DashboardView: View {
     @Environment(\.viewModelContainer) private var viewModelContainer
     @State private var selectedTimeFilter: TimeFilter = .today
-    @State private var showingNavigationMenu = false
     @StateObject private var realTimeService = RealTimeDataService()
     @StateObject private var performanceService = PerformanceMetricsService()
     @StateObject private var notificationService = EnhancedNotificationService()
     
-    private var viewModel: DashboardViewModel {
-        viewModelContainer?.dashboardViewModel ?? DashboardViewModel(
-            dataService: DataService(modelContext: ModelContext(for: Schema([
-                SolarJob.self, Customer.self, Equipment.self, Installation.self, Vendor.self, Contract.self
-            ])))
-        )
+    @Environment(\.modelContext) private var modelContext
+    @State private var viewModel: DashboardViewModel?
+    
+    private var currentViewModel: DashboardViewModel {
+        if let vm = viewModel {
+            return vm
+        } else {
+            if let container = viewModelContainer {
+                return container.dashboardViewModel
+            } else {
+                let dataService = DataService(modelContext: modelContext)
+                let newViewModel = DashboardViewModel(dataService: dataService)
+                viewModel = newViewModel
+                return newViewModel
+            }
+        }
     }
     
     var body: some View {
-        NavigationView {
-            ZStack {
-                if viewModel.isLoading {
-                    ProgressView("Loading...")
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .background(Color(UIColor.systemBackground))
-                } else {
-                    ScrollView {
-                        LazyVStack(spacing: 20) {
-                            // Critical Alerts
-                            if !viewModel.alerts.isEmpty {
-                                DashboardAlertsView(alerts: viewModel.alerts) { alert in
-                                    viewModel.dismissAlert(alert)
-                                }
-                            }
-                            
-                            // Time Filter Tabs
-                            DashboardTimeFilterView(selectedFilter: $selectedTimeFilter) {
-                                viewModel.updateTimeFilter(selectedTimeFilter)
-                            }
-                            
-                            // Quick Stats
-                            DashboardStatsView(
-                                totalJobs: viewModel.totalJobs,
-                                activeJobs: viewModel.activeJobs,
-                                totalCustomers: viewModel.totalCustomers,
-                                lowStockItems: viewModel.lowStockItemsCount
-                            )
-                            
-                            // Recent Activity
-                            DashboardRecentActivityView(
-                                recentJobs: viewModel.recentJobs,
-                                upcomingInstallations: viewModel.upcomingInstallations
-                            )
-                            
-                            // Revenue Overview
-                            DashboardRevenueView(
-                                totalRevenue: viewModel.totalRevenue,
-                                pendingRevenue: viewModel.pendingRevenue,
-                                completionRate: viewModel.getJobsCompletionRate(),
-                                averageJobValue: viewModel.getAverageJobValue()
-                            )
-                            
-                            // Equipment Alerts
-                            DashboardEquipmentAlertsView(
-                                lowStockEquipment: viewModel.lowStockEquipment
-                            ) { equipment in
-                                viewModel.reorderEquipment(equipment)
-                            }
-                        }
-                        .padding()
-                        .padding(.bottom, 20)
-                    }
-                }
-            }
-            .navigationTitle("Solar Scheduler")
-            .navigationBarTitleDisplayMode(.large)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    HStack(spacing: 8) {
-                        if realTimeService.isConnected {
-                            LiveDataIndicator()
-                        } else {
-                            HStack(spacing: 4) {
-                                Circle()
-                                    .fill(Color.red)
-                                    .frame(width: 8, height: 8)
-                                Text("OFFLINE")
-                                    .font(.caption2)
-                                    .fontWeight(.semibold)
-                                    .foregroundColor(.red)
+        ZStack {
+            if currentViewModel.isLoading {
+                ProgressView("Loading...")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.systemBackground)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 20) {
+                        // Critical Alerts
+                        if !currentViewModel.alerts.isEmpty {
+                            DashboardAlertsView(alerts: currentViewModel.alerts) { alert in
+                                currentViewModel.dismissAlert(alert)
                             }
                         }
                         
-                        if notificationService.unreadCount > 0 {
-                            Button(action: {
-                                // Handle notifications
-                            }) {
-                                ZStack {
-                                    Image(systemName: "bell.fill")
-                                        .foregroundColor(.orange)
-                                    
-                                    if notificationService.unreadCount > 0 {
-                                        Text("\(notificationService.unreadCount)")
-                                            .font(.caption2)
-                                            .fontWeight(.bold)
-                                            .foregroundColor(.white)
-                                            .padding(4)
-                                            .background(Color.red)
-                                            .clipShape(Circle())
-                                            .offset(x: 8, y: -8)
-                                    }
-                                }
-                            }
-                            .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.5), trigger: notificationService.unreadCount)
+                        // Time Filter Tabs
+                        DashboardTimeFilterView(selectedFilter: $selectedTimeFilter) {
+                            currentViewModel.updateTimeFilter(selectedTimeFilter)
                         }
-                    }
-                }
-                
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    HStack(spacing: 12) {
-                        Button(action: {
-                            withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
-                                realTimeService.forceRefresh()
-                                performanceService.updatePerformanceData()
-                            }
-                        }) {
-                            DataUpdateIndicator()
-                        }
-                        .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.3), trigger: realTimeService.lastUpdateTime)
                         
-                        Button(action: {
-                            showingNavigationMenu.toggle()
-                        }) {
-                            Image(systemName: "line.3.horizontal")
-                                .font(.title2)
+                        // Quick Stats
+                        DashboardStatsView(
+                            totalJobs: currentViewModel.totalJobs,
+                            activeJobs: currentViewModel.activeJobs,
+                            totalCustomers: currentViewModel.totalCustomers,
+                            lowStockItems: currentViewModel.lowStockItemsCount
+                        )
+                        
+                        // Recent Activity
+                        DashboardRecentActivityView(
+                            recentJobs: currentViewModel.recentJobs,
+                            upcomingInstallations: currentViewModel.upcomingInstallations
+                        )
+                        
+                        // Revenue Overview
+                        DashboardRevenueView(
+                            totalRevenue: currentViewModel.totalRevenue,
+                            pendingRevenue: currentViewModel.pendingRevenue,
+                            completionRate: currentViewModel.getJobsCompletionRate(),
+                            averageJobValue: currentViewModel.getAverageJobValue()
+                        )
+                        
+                        // Equipment Alerts
+                        DashboardEquipmentAlertsView(
+                            lowStockEquipment: currentViewModel.lowStockEquipment
+                        ) { equipment in
+                            currentViewModel.reorderEquipment(equipment)
                         }
-                        .buttonStyle(BouncyButtonStyle())
                     }
+                    .padding()
+                    .padding(.bottom, 20)
                 }
-            }
-            .refreshable {
-                viewModel.refreshData()
-            }
-            .onAppear {
-                // Load dashboard data when view appears
-                viewModel.refreshData()
-            }
-            .alert("Error", isPresented: .constant(viewModel.errorMessage != nil)) {
-                Button("OK") {
-                    viewModel.errorMessage = nil
-                }
-            } message: {
-                Text(viewModel.errorMessage ?? "")
             }
         }
-        .navigationViewStyle(.stack)
-        .sheet(isPresented: $showingNavigationMenu) {
-            NavigationMenuView()
+        .navigationTitle("Solar Scheduler")
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.large)
+        #endif
+        .toolbar {
+            ToolbarItem(placement: .automatic) {
+                HStack(spacing: 8) {
+                    if realTimeService.isConnected {
+                        LiveDataIndicator()
+                    } else {
+                        HStack(spacing: 4) {
+                            Circle()
+                                .fill(Color.red)
+                                .frame(width: 8, height: 8)
+                            Text("OFFLINE")
+                                .font(.caption2)
+                                .fontWeight(.semibold)
+                                .foregroundColor(.red)
+                        }
+                    }
+                    
+                    Button(action: {
+                        // Handle notifications
+                    }) {
+                        ZStack {
+                            Image(systemName: notificationService.unreadCount > 0 ? "bell.fill" : "bell")
+                                .foregroundColor(notificationService.unreadCount > 0 ? .orange : .primary)
+                            
+                            if notificationService.unreadCount > 0 {
+                                Text("\(notificationService.unreadCount)")
+                                    .font(.caption2)
+                                    .fontWeight(.bold)
+                                    .foregroundColor(.white)
+                                    .padding(4)
+                                    .background(Color.red)
+                                    .clipShape(Circle())
+                                    .offset(x: 8, y: -8)
+                            }
+                        }
+                    }
+                    .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.5), trigger: notificationService.unreadCount)
+                }
+            }
+            
+            ToolbarItem(placement: .automatic) {
+                HStack(spacing: 12) {
+                    Button(action: {
+                        currentViewModel.refreshData()
+                    }) {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.title2)
+                    }
+                    .buttonStyle(BouncyButtonStyle())
+                }
+            }
+        }
+        .refreshable {
+            currentViewModel.refreshData()
+        }
+        .onAppear {
+            // Load dashboard data when view appears
+            currentViewModel.refreshData()
+        }
+        .alert("Error", isPresented: .constant(currentViewModel.errorMessage != nil)) {
+            Button("OK") {
+                currentViewModel.errorMessage = nil
+            }
+        } message: {
+            Text(currentViewModel.errorMessage ?? "")
         }
     }
 }
@@ -166,6 +159,9 @@ struct DashboardStatsView: View {
     let activeJobs: Int
     let totalCustomers: Int
     let lowStockItems: Int
+    @State private var showingJobs = false
+    @State private var showingCustomers = false
+    @State private var showingInventory = false
     
     var body: some View {
         LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 2), spacing: 16) {
@@ -174,61 +170,107 @@ struct DashboardStatsView: View {
                 value: "\(totalJobs)",
                 icon: "list.bullet.clipboard",
                 color: .blue
-            )
+            ) {
+                showingJobs = true
+            }
             
             DashboardStatCard(
                 title: "Active Jobs",
                 value: "\(activeJobs)",
                 icon: "hammer",
                 color: .orange
-            )
+            ) {
+                showingJobs = true
+            }
             
             DashboardStatCard(
                 title: "Customers",
                 value: "\(totalCustomers)",
                 icon: "person.2",
                 color: .green
-            )
+            ) {
+                showingCustomers = true
+            }
             
             DashboardStatCard(
                 title: "Low Stock",
                 value: "\(lowStockItems)",
                 icon: "exclamationmark.triangle",
                 color: lowStockItems > 0 ? .red : .gray
-            )
+            ) {
+                showingInventory = true
+            }
+        }
+        .sheet(isPresented: $showingJobs) {
+            NavigationStack {
+                JobsListView()
+            }
+        }
+        .sheet(isPresented: $showingCustomers) {
+            NavigationStack {
+                CustomersListView()
+            }
+        }
+        .sheet(isPresented: $showingInventory) {
+            NavigationStack {
+                InventoryListView()
+            }
         }
     }
 }
+
 
 struct DashboardStatCard: View {
     let title: String
     let value: String
     let icon: String
     let color: Color
+    let action: (() -> Void)?
+    
+    init(title: String, value: String, icon: String, color: Color, action: (() -> Void)? = nil) {
+        self.title = title
+        self.value = value
+        self.icon = icon
+        self.color = color
+        self.action = action
+    }
     
     var body: some View {
-        VStack(spacing: 8) {
-            HStack {
-                Image(systemName: icon)
-                    .foregroundColor(color)
-                    .font(.title2)
-                Spacer()
-            }
-            
-            VStack(alignment: .leading, spacing: 4) {
-                Text(value)
-                    .font(.title)
-                    .fontWeight(.bold)
+        Button(action: {
+            action?()
+        }) {
+            VStack(spacing: 8) {
+                HStack {
+                    Image(systemName: icon)
+                        .foregroundColor(color)
+                        .font(.title2)
+                    Spacer()
+                    
+                    if action != nil {
+                        Image(systemName: "arrow.up.right")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
                 
-                Text(title)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(value)
+                        .font(.title)
+                        .fontWeight(.bold)
+                        .foregroundColor(.primary)
+                    
+                    Text(title)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding()
+            .background(Color.secondarySystemBackground)
+            .cornerRadius(12)
         }
-        .padding()
-        .background(Color(UIColor.secondarySystemBackground))
-        .cornerRadius(12)
+        .buttonStyle(PlainButtonStyle())
+        .disabled(action == nil)
     }
 }
 
@@ -246,7 +288,7 @@ struct DashboardRecentActivityView: View {
                 ForEach(recentJobs.prefix(3), id: \.id) { job in
                     HStack {
                         Image(systemName: "list.bullet.clipboard")
-                            .foregroundColor(.blue)
+                            .foregroundColor(Color.blue)
                         
                         VStack(alignment: .leading) {
                             Text(job.customerName)
@@ -299,7 +341,7 @@ struct DashboardRecentActivityView: View {
             }
         }
         .padding(.vertical)
-        .background(Color(UIColor.secondarySystemBackground))
+        .background(Color.secondarySystemBackground)
         .cornerRadius(12)
     }
 }
@@ -334,7 +376,7 @@ struct DashboardRevenueView: View {
                     Text("$\(pendingRevenue.safeValue, specifier: "%.0f")")
                         .font(.title2)
                         .fontWeight(.bold)
-                        .foregroundColor(.blue)
+                        .foregroundColor(Color.blue)
                 }
                 
                 VStack(alignment: .leading) {
@@ -360,7 +402,7 @@ struct DashboardRevenueView: View {
             .padding(.horizontal)
         }
         .padding(.vertical)
-        .background(Color(UIColor.secondarySystemBackground))
+        .background(Color.secondarySystemBackground)
         .cornerRadius(12)
     }
 }
@@ -480,8 +522,6 @@ struct DashboardTimeFilterView: View {
 
 #Preview {
     let container = try! ModelContainer(for: SolarJob.self, Customer.self, Equipment.self, Installation.self, Vendor.self, Contract.self)
-    let dataService = DataService(modelContext: container.mainContext)
-    let viewModel = DashboardViewModel(dataService: dataService)
     
     return DashboardView()
         .modelContainer(container)
@@ -512,23 +552,25 @@ struct NavigationMenuView: View {
                         Label("Customers", systemImage: "person.2.fill")
                     }
                     
-                    NavigationLink(destination: EquipmentListView()) {
+                    NavigationLink(destination: InventoryListView()) {
                         Label("Equipment", systemImage: "wrench.and.screwdriver")
                     }
                     
-                    NavigationLink(destination: VendorsListView()) {
+                    NavigationLink(destination: Text("Vendors - Coming Soon")) {
                         Label("Vendors", systemImage: "building.2")
                     }
                     
-                    NavigationLink(destination: SettingsView()) {
+                    NavigationLink(destination: Text("Settings - Coming Soon")) {
                         Label("Settings", systemImage: "gear")
                     }
                 }
             }
             .navigationTitle("Navigation")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItem(placement: .automatic) {
                     Button("Done") {
                         dismiss()
                     }

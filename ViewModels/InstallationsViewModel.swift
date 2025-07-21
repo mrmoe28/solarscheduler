@@ -6,6 +6,7 @@ class InstallationsViewModel {
     private let dataService: DataService
     private let validationService: ValidationService
     private let notificationService: NotificationService
+    private let userSession: UserSession
     
     // Data
     var installations: [Installation] = []
@@ -15,31 +16,11 @@ class InstallationsViewModel {
     // UI State
     var isLoading = false
     var errorMessage: String?
-    var searchText = "" {
-        didSet {
-            applyFilters()
-        }
-    }
-    var selectedStatus: InstallationStatus? {
-        didSet {
-            applyFilters()
-        }
-    }
-    var selectedDateRange: DateRange = .all {
-        didSet {
-            applyFilters()
-        }
-    }
-    var sortBy: InstallationSortBy = .scheduledDate {
-        didSet {
-            applyFilters()
-        }
-    }
-    var sortAscending = true {
-        didSet {
-            applyFilters()
-        }
-    }
+    var searchText = ""
+    var selectedStatus: InstallationStatus?
+    var selectedDateRange: DateRange = .all
+    var sortBy: InstallationSortBy = .scheduledDate
+    var sortAscending = true
     
     // Calendar State
     var selectedDate: Date = Date()
@@ -58,11 +39,16 @@ class InstallationsViewModel {
     var newInstallationNotes = ""
     var formErrors: [ValidationService.ValidationError] = []
     
-    init(dataService: DataService, validationService: ValidationService = .shared, notificationService: NotificationService = .shared) {
+    init(dataService: DataService, validationService: ValidationService = .shared, notificationService: NotificationService = .shared, userSession: UserSession = .shared) {
         self.dataService = dataService
         self.validationService = validationService
         self.notificationService = notificationService
+        self.userSession = userSession
         loadData()
+    }
+    
+    private var currentUser: User? {
+        userSession.currentUser
     }
     
     // MARK: - Data Loading
@@ -72,15 +58,22 @@ class InstallationsViewModel {
             isLoading = true
             errorMessage = nil
             
+            guard let user = currentUser else {
+                errorMessage = "No user signed in"
+                isLoading = false
+                return
+            }
+            
             do {
                 // Load installations
                 installations = try dataService.fetchInstallations(
+                    for: user,
                     sortBy: sortBy,
                     ascending: sortAscending
                 )
                 
                 // Load jobs for installation creation
-                jobs = try dataService.fetchJobs()
+                jobs = try dataService.fetchJobs(for: user)
                 
                 applyFilters()
             } catch {
@@ -122,8 +115,12 @@ class InstallationsViewModel {
             filtered.sort { sortAscending ? $0.scheduledDate < $1.scheduledDate : $0.scheduledDate > $1.scheduledDate }
         case .status:
             filtered.sort { sortAscending ? $0.status.rawValue < $1.status.rawValue : $0.status.rawValue > $1.status.rawValue }
-        case .crewSize:
-            filtered.sort { sortAscending ? $0.crewSize < $1.crewSize : $0.crewSize > $1.crewSize }
+        case .crewMembers:
+            filtered.sort { installation1, installation2 in
+                let crew1 = installation1.crewMembers.split(separator: ",").count
+                let crew2 = installation2.crewMembers.split(separator: ",").count
+                return sortAscending ? crew1 < crew2 : crew1 > crew2
+            }
         }
         
         filteredInstallations = filtered
@@ -188,14 +185,20 @@ class InstallationsViewModel {
             return
         }
         
+        guard let user = currentUser else {
+            errorMessage = "No user signed in"
+            return
+        }
+        
         Task { @MainActor in
             do {
                 let installation = try dataService.createInstallation(
                     job: job,
                     scheduledDate: newInstallationScheduledDate,
+                    crewMembers: "Crew \(newInstallationCrewSize)",
+                    notes: newInstallationNotes,
                     estimatedDuration: newInstallationEstimatedDuration,
-                    crewSize: newInstallationCrewSize,
-                    notes: newInstallationNotes
+                    user: user
                 )
                 
                 // Schedule reminder notification
@@ -249,7 +252,7 @@ class InstallationsViewModel {
                 
                 // Update completion date if completed
                 if newStatus == .completed {
-                    installation.completionDate = Date()
+                    installation.endTime = Date()
                 }
                 
                 try dataService.save()
@@ -273,8 +276,8 @@ class InstallationsViewModel {
     func rescheduleInstallation(_ installation: Installation, to newDate: Date) {
         let validation = validationService.validateInstallation(
             scheduledDate: newDate,
-            estimatedDuration: installation.estimatedDuration,
-            crewSize: installation.crewSize
+            estimatedDuration: 8.0, // Default 8 hours
+            crewSize: 2 // Default crew size
         )
         
         guard validation.isValid else {
@@ -349,6 +352,43 @@ class InstallationsViewModel {
         applyFilters()
     }
     
+    // MARK: - Manual Filter Updates
+    
+    func updateSearchText(_ text: String) {
+        searchText = text
+        Task { @MainActor in
+            applyFilters()
+        }
+    }
+    
+    func updateSelectedStatus(_ status: InstallationStatus?) {
+        selectedStatus = status
+        Task { @MainActor in
+            applyFilters()
+        }
+    }
+    
+    func updateSelectedDateRange(_ range: DateRange) {
+        selectedDateRange = range
+        Task { @MainActor in
+            applyFilters()
+        }
+    }
+    
+    func updateSortBy(_ sort: InstallationSortBy) {
+        sortBy = sort
+        Task { @MainActor in
+            applyFilters()
+        }
+    }
+    
+    func updateSortAscending(_ ascending: Bool) {
+        sortAscending = ascending
+        Task { @MainActor in
+            applyFilters()
+        }
+    }
+    
     func getInstallationsCount(for status: InstallationStatus) -> Int {
         installations.filter { $0.status == status }.count
     }
@@ -361,6 +401,10 @@ class InstallationsViewModel {
         newInstallationEstimatedDuration = 8 * 3600 // 8 hours
         newInstallationCrewSize = 2
         newInstallationNotes = ""
+        formErrors = []
+    }
+    
+    func clearFormErrors() {
         formErrors = []
     }
     
@@ -477,13 +521,18 @@ class InstallationsViewModel {
     
     func getAvailableJobs() -> [SolarJob] {
         return jobs.filter { job in
-            job.status == .approved && canScheduleInstallation(for: job)
+            // Include pending and approved jobs that can be scheduled
+            (job.status == .pending || job.status == .approved) && canScheduleInstallation(for: job)
         }
     }
     
     func getCrewUtilization() -> Double {
         let totalCrewDays = installations.filter { $0.status == .scheduled || $0.status == .inProgress }
-            .reduce(0) { $0 + $1.crewSize }
+            .reduce(0) { total, installation in 
+                // Parse crew size from crewMembers string, default to 2
+                let crewSize = installation.crewMembers.split(separator: ",").count
+                return total + max(crewSize, 1)
+            }
         
         // This would be calculated against available crew in production
         let availableCrewDays = 10 // Assume 10 crew members available
@@ -495,7 +544,9 @@ class InstallationsViewModel {
         let completedInstallations = installations.filter { $0.status == .completed }
         guard !completedInstallations.isEmpty else { return 0 }
         
-        let totalDuration = completedInstallations.reduce(0) { $0 + $1.estimatedDuration }
+        let totalDuration = completedInstallations.reduce(0.0) { total, installation in 
+            return total + (installation.duration ?? 8.0 * 3600) // Use actual duration or default 8 hours
+        }
         return totalDuration / Double(completedInstallations.count)
     }
 }

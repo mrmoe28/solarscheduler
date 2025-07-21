@@ -301,8 +301,8 @@ class ExportService {
         var csv = "Name,Email,Phone,Address,Lead Status,Created Date,Total Jobs,Total Revenue\n"
         
         for customer in customers {
-            let totalJobs = customer.jobs?.count ?? 0
-            let totalRevenue = customer.jobs?.reduce(0) { $0 + $1.estimatedRevenue } ?? 0
+            let totalJobs = customer.jobs.count
+            let totalRevenue = customer.jobs.reduce(0) { $0 + $1.estimatedRevenue }
             
             csv += "\"\(customer.name)\",\"\(customer.email)\",\"\(customer.phone)\",\"\(customer.address)\",\(customer.leadStatus.rawValue),\(customer.createdDate.formatted(date: .abbreviated, time: .omitted)),\(totalJobs),\(totalRevenue)\n"
         }
@@ -364,7 +364,8 @@ class ExportService {
                 "createdDate": customer.createdDate.ISO8601Format()
             ]
             
-            if includeJobHistory, let jobs = customer.jobs {
+            if includeJobHistory && !customer.jobs.isEmpty {
+                let jobs = customer.jobs
                 data["totalJobs"] = jobs.count
                 data["totalRevenue"] = jobs.reduce(0) { $0 + $1.estimatedRevenue }
             }
@@ -415,7 +416,7 @@ class ExportService {
                 txt += "Scheduled: \(scheduledDate.formatted(date: .abbreviated, time: .omitted))\n"
             }
             
-            txt += "Estimated Revenue: $\(job.estimatedRevenue.safeValue, specifier: "%.2f")\n"
+            txt += "Estimated Revenue: $\(String(format: "%.2f", job.estimatedRevenue.safeValue))\n"
             
             if includeDetails && !job.notes.isEmpty {
                 txt += "Notes: \(job.notes)\n"
@@ -441,9 +442,10 @@ class ExportService {
             txt += "Lead Status: \(customer.leadStatus.rawValue)\n"
             txt += "Created: \(customer.createdDate.formatted(date: .abbreviated, time: .omitted))\n"
             
-            if includeJobHistory, let jobs = customer.jobs {
+            if includeJobHistory && !customer.jobs.isEmpty {
+                let jobs = customer.jobs
                 txt += "Total Jobs: \(jobs.count)\n"
-                txt += "Total Revenue: $\(jobs.reduce(0) { $0 + $1.estimatedRevenue.safeValue }, specifier: "%.2f")\n"
+                txt += "Total Revenue: $\(String(format: "%.2f", jobs.reduce(0) { $0 + $1.estimatedRevenue.safeValue }))\n"
             }
             
             txt += "\n" + String(repeating: "-", count: 40) + "\n\n"
@@ -464,9 +466,9 @@ class ExportService {
             txt += "Brand: \(item.brand)\n"
             txt += "Model: \(item.model)\n"
             txt += "Quantity: \(item.quantity)\n"
-            txt += "Unit Cost: $\(item.unitPrice.safeValue, specifier: "%.2f")\n"
+            txt += "Unit Cost: $\(String(format: "%.2f", item.unitPrice.safeValue))\n"
             txt += "Minimum Stock: \(item.minimumStock)\n"
-            txt += "Total Value: $\(item.totalValue.safeValue, specifier: "%.2f")\n"
+            txt += "Total Value: $\(String(format: "%.2f", item.totalValue.safeValue))\n"
             txt += "Low Stock: \(item.isLowStock ? "Yes" : "No")\n"
             txt += "\n" + String(repeating: "-", count: 40) + "\n\n"
         }
@@ -497,15 +499,15 @@ class ExportService {
         txt += "Completed Jobs: \(completedJobs.count)\n"
         txt += "Active Jobs: \(jobs.filter { $0.status == .inProgress }.count)\n"
         txt += "Pending Jobs: \(jobs.filter { $0.status == .pending }.count)\n"
-        txt += "Total Revenue: $\(totalRevenue.safeValue, specifier: "%.2f")\n"
-        txt += "Pending Revenue: $\(pendingRevenue.safeValue, specifier: "%.2f")\n\n"
+        txt += "Total Revenue: $\(String(format: "%.2f", totalRevenue.safeValue))\n"
+        txt += "Pending Revenue: $\(String(format: "%.2f", pendingRevenue.safeValue))\n\n"
         
         // Equipment Statistics
         let lowStockItems = equipment.filter { $0.isLowStock }
         let totalEquipmentValue = equipment.reduce(0) { $0 + $1.totalValue }
         
         txt += "EQUIPMENT STATISTICS\n"
-        txt += "Total Equipment Value: $\(totalEquipmentValue.safeValue, specifier: "%.2f")\n"
+        txt += "Total Equipment Value: $\(String(format: "%.2f", totalEquipmentValue.safeValue))\n"
         txt += "Low Stock Items: \(lowStockItems.count)\n"
         txt += "Out of Stock Items: \(equipment.filter { $0.quantity == 0 }.count)\n\n"
         

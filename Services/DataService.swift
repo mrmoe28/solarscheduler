@@ -1,3 +1,4 @@
+
 import Foundation
 import SwiftData
 
@@ -7,6 +8,42 @@ class DataService {
     
     init(modelContext: ModelContext) {
         self.modelContext = modelContext
+    }
+    
+    // MARK: - User Operations
+    
+    func createUser(
+        email: String,
+        fullName: String,
+        passwordHash: String,
+        companyName: String = ""
+    ) throws -> User {
+        let user = User(
+            email: email,
+            fullName: fullName,
+            passwordHash: passwordHash,
+            companyName: companyName
+        )
+        
+        modelContext.insert(user)
+        try save()
+        return user
+    }
+    
+    func fetchUser(by email: String) throws -> User? {
+        let descriptor = FetchDescriptor<User>(
+            predicate: #Predicate<User> { user in
+                user.email == email
+            }
+        )
+        return try modelContext.fetch(descriptor).first
+    }
+    
+    func fetchAllUsers() throws -> [User] {
+        let descriptor = FetchDescriptor<User>(
+            sortBy: [SortDescriptor(\.createdDate, order: .reverse)]
+        )
+        return try modelContext.fetch(descriptor)
     }
     
     // MARK: - Generic CRUD Operations
@@ -32,7 +69,8 @@ class DataService {
         address: String,
         systemSize: Double,
         estimatedRevenue: Double,
-        notes: String = ""
+        notes: String = "",
+        user: User
     ) throws -> SolarJob {
         let job = SolarJob(
             customerName: customerName,
@@ -42,12 +80,14 @@ class DataService {
             notes: notes
         )
         
+        job.user = user
         modelContext.insert(job)
         try save()
         return job
     }
     
     func fetchJobs(
+        for user: User,
         status: JobStatus? = nil,
         sortBy: SortBy = .createdDate,
         ascending: Bool = false,
@@ -55,14 +95,7 @@ class DataService {
     ) throws -> [SolarJob] {
         var descriptor = FetchDescriptor<SolarJob>()
         
-        // Apply status filter
-        if let status = status {
-            descriptor.predicate = #Predicate<SolarJob> { job in
-                job.status == status
-            }
-        }
-        
-        // Apply sorting
+        // Apply sorting first
         switch sortBy {
         case .createdDate:
             descriptor.sortBy = [SortDescriptor(\.createdDate, order: ascending ? .forward : .reverse)]
@@ -74,12 +107,25 @@ class DataService {
             descriptor.sortBy = [SortDescriptor(\.systemSize, order: ascending ? .forward : .reverse)]
         }
         
-        // Apply limit
-        if let limit = limit {
-            descriptor.fetchLimit = limit
+        // Fetch all jobs and filter
+        let allJobs = try modelContext.fetch(descriptor)
+        
+        // Filter by user and status
+        var filteredJobs = allJobs.filter { job in
+            guard let jobUser = job.user else { return false }
+            return jobUser.id == user.id
         }
         
-        return try fetch(SolarJob.self, descriptor: descriptor)
+        if let status = status {
+            filteredJobs = filteredJobs.filter { $0.status == status }
+        }
+        
+        // Apply limit
+        if let limit = limit {
+            return Array(filteredJobs.prefix(limit))
+        }
+        
+        return filteredJobs
     }
     
     func updateJobStatus(_ job: SolarJob, to status: JobStatus) throws {
@@ -87,15 +133,20 @@ class DataService {
         try save()
     }
     
-    func searchJobs(query: String) throws -> [SolarJob] {
-        let descriptor = FetchDescriptor<SolarJob>(
-            predicate: #Predicate<SolarJob> { job in
-                job.customerName.localizedStandardContains(query) ||
-                job.address.localizedStandardContains(query) ||
-                job.notes.localizedStandardContains(query)
-            }
-        )
-        return try fetch(SolarJob.self, descriptor: descriptor)
+    func searchJobs(for user: User, query: String) throws -> [SolarJob] {
+        // Fetch all jobs for the user first
+        let descriptor = FetchDescriptor<SolarJob>()
+        let allJobs = try modelContext.fetch(descriptor)
+        
+        // Filter by user and search query
+        return allJobs.filter { job in
+            guard let jobUser = job.user else { return false }
+            guard jobUser.id == user.id else { return false }
+            
+            return job.customerName.localizedCaseInsensitiveContains(query) ||
+                   job.address.localizedCaseInsensitiveContains(query) ||
+                   job.notes.localizedCaseInsensitiveContains(query)
+        }
     }
     
     // MARK: - Customer Operations
@@ -104,7 +155,8 @@ class DataService {
         name: String,
         email: String,
         phone: String,
-        address: String
+        address: String,
+        user: User
     ) throws -> Customer {
         let customer = Customer(
             name: name,
@@ -113,25 +165,20 @@ class DataService {
             address: address
         )
         
+        customer.user = user
         modelContext.insert(customer)
         try save()
         return customer
     }
     
     func fetchCustomers(
+        for user: User,
         leadStatus: LeadStatus? = nil,
         sortBy: CustomerSortBy = .name,
         ascending: Bool = true,
         limit: Int? = nil
     ) throws -> [Customer] {
         var descriptor = FetchDescriptor<Customer>()
-        
-        // Apply lead status filter
-        if let leadStatus = leadStatus {
-            descriptor.predicate = #Predicate<Customer> { customer in
-                customer.leadStatus == leadStatus
-            }
-        }
         
         // Apply sorting
         switch sortBy {
@@ -140,26 +187,44 @@ class DataService {
         case .createdDate:
             descriptor.sortBy = [SortDescriptor(\.createdDate, order: ascending ? .forward : .reverse)]
         case .leadStatus:
-            descriptor.sortBy = [SortDescriptor(\.leadStatus, order: ascending ? .forward : .reverse)]
+            descriptor.sortBy = [SortDescriptor(\.leadStatus.rawValue, order: ascending ? .forward : .reverse)]
+        }
+        
+        // Fetch all customers and filter
+        let allCustomers = try modelContext.fetch(descriptor)
+        
+        // Filter by user and lead status
+        var filteredCustomers = allCustomers.filter { customer in
+            guard let customerUser = customer.user else { return false }
+            return customerUser.id == user.id
+        }
+        
+        if let leadStatus = leadStatus {
+            filteredCustomers = filteredCustomers.filter { $0.leadStatus == leadStatus }
         }
         
         // Apply limit
         if let limit = limit {
-            descriptor.fetchLimit = limit
+            return Array(filteredCustomers.prefix(limit))
         }
         
-        return try fetch(Customer.self, descriptor: descriptor)
+        return filteredCustomers
     }
     
-    func searchCustomers(query: String) throws -> [Customer] {
-        let descriptor = FetchDescriptor<Customer>(
-            predicate: #Predicate<Customer> { customer in
-                customer.name.localizedStandardContains(query) ||
-                customer.email.localizedStandardContains(query) ||
-                customer.phone.localizedStandardContains(query)
-            }
-        )
-        return try fetch(Customer.self, descriptor: descriptor)
+    func searchCustomers(for user: User, query: String) throws -> [Customer] {
+        // Fetch all customers
+        let descriptor = FetchDescriptor<Customer>()
+        let allCustomers = try modelContext.fetch(descriptor)
+        
+        // Filter by user and search query
+        return allCustomers.filter { customer in
+            guard let customerUser = customer.user else { return false }
+            guard customerUser.id == user.id else { return false }
+            
+            return customer.name.localizedCaseInsensitiveContains(query) ||
+                   customer.email.localizedCaseInsensitiveContains(query) ||
+                   customer.phone.localizedCaseInsensitiveContains(query)
+        }
     }
     
     // MARK: - Equipment Operations
@@ -169,56 +234,40 @@ class DataService {
         category: EquipmentCategory,
         brand: String,
         model: String,
+        manufacturer: String = "",
         quantity: Int,
         unitPrice: Double,
-        minimumStock: Int
+        unitCost: Double? = nil,
+        minimumStock: Int,
+        user: User
     ) throws -> Equipment {
         let equipment = Equipment(
             name: name,
             category: category,
             brand: brand,
             model: model,
+            manufacturer: manufacturer,
             quantity: quantity,
             unitPrice: unitPrice,
-            lowStockThreshold: minimumStock
+            unitCost: unitCost,
+            lowStockThreshold: minimumStock,
+            minimumStock: minimumStock
         )
         
+        equipment.user = user
         modelContext.insert(equipment)
         try save()
         return equipment
     }
     
     func fetchEquipment(
+        for user: User,
         category: EquipmentCategory? = nil,
         lowStockOnly: Bool = false,
         sortBy: EquipmentSortBy = .name,
         ascending: Bool = true
     ) throws -> [Equipment] {
         var descriptor = FetchDescriptor<Equipment>()
-        
-        // Build predicate
-        var predicates: [Predicate<Equipment>] = []
-        
-        if let category = category {
-            predicates.append(#Predicate<Equipment> { equipment in
-                equipment.category == category
-            })
-        }
-        
-        if lowStockOnly {
-            predicates.append(#Predicate<Equipment> { equipment in
-                equipment.quantity <= equipment.lowStockThreshold
-            })
-        }
-        
-        if !predicates.isEmpty {
-            descriptor.predicate = predicates.reduce(predicates.first!) { result, predicate in
-                #Predicate<Equipment> { equipment in
-                    @Predicate { equipment in result } &&
-                    @Predicate { equipment in predicate }
-                }
-            }
-        }
         
         // Apply sorting
         switch sortBy {
@@ -227,12 +276,28 @@ class DataService {
         case .quantity:
             descriptor.sortBy = [SortDescriptor(\.quantity, order: ascending ? .forward : .reverse)]
         case .unitCost:
-            descriptor.sortBy = [SortDescriptor(\.unitPrice, order: ascending ? .forward : .reverse)]
+            descriptor.sortBy = [SortDescriptor(\.unitCost, order: ascending ? .forward : .reverse)]
         case .category:
-            descriptor.sortBy = [SortDescriptor(\.category, order: ascending ? .forward : .reverse)]
+            descriptor.sortBy = [SortDescriptor(\.category.rawValue, order: ascending ? .forward : .reverse)]
         }
         
-        return try fetch(Equipment.self, descriptor: descriptor)
+        // Fetch all equipment and filter
+        let allEquipment = try modelContext.fetch(descriptor)
+        
+        // Filter by category and stock level
+        var filteredEquipment = allEquipment
+        
+        if let category = category {
+            filteredEquipment = filteredEquipment.filter { $0.category == category }
+        }
+        
+        if lowStockOnly {
+            filteredEquipment = filteredEquipment.filter { $0.quantity <= $0.lowStockThreshold }
+        }
+        
+        // Note: Equipment filtering by user will be added when user relationship is added to model
+        
+        return filteredEquipment
     }
     
     func updateEquipmentQuantity(_ equipment: Equipment, newQuantity: Int) throws {
@@ -245,24 +310,27 @@ class DataService {
     func createInstallation(
         job: SolarJob,
         scheduledDate: Date,
-        estimatedDuration: TimeInterval,
-        crewSize: Int,
-        notes: String = ""
+        crewMembers: String = "",
+        notes: String = "",
+        estimatedDuration: TimeInterval = 8 * 3600,
+        user: User
     ) throws -> Installation {
         let installation = Installation(
             scheduledDate: scheduledDate,
-            estimatedDuration: estimatedDuration,
-            crewSize: crewSize,
-            notes: notes
+            crewMembers: crewMembers,
+            notes: notes,
+            estimatedDuration: estimatedDuration
         )
         
         installation.job = job
+        installation.user = user
         modelContext.insert(installation)
         try save()
         return installation
     }
     
     func fetchInstallations(
+        for user: User,
         startDate: Date? = nil,
         endDate: Date? = nil,
         status: InstallationStatus? = nil,
@@ -271,53 +339,44 @@ class DataService {
     ) throws -> [Installation] {
         var descriptor = FetchDescriptor<Installation>()
         
-        // Build predicate
-        var predicates: [Predicate<Installation>] = []
-        
-        if let startDate = startDate {
-            predicates.append(#Predicate<Installation> { installation in
-                installation.scheduledDate >= startDate
-            })
-        }
-        
-        if let endDate = endDate {
-            predicates.append(#Predicate<Installation> { installation in
-                installation.scheduledDate <= endDate
-            })
-        }
-        
-        if let status = status {
-            predicates.append(#Predicate<Installation> { installation in
-                installation.status == status
-            })
-        }
-        
-        if !predicates.isEmpty {
-            descriptor.predicate = predicates.reduce(predicates.first!) { result, predicate in
-                #Predicate<Installation> { installation in
-                    @Predicate { installation in result } &&
-                    @Predicate { installation in predicate }
-                }
-            }
-        }
-        
         // Apply sorting
         switch sortBy {
         case .scheduledDate:
             descriptor.sortBy = [SortDescriptor(\.scheduledDate, order: ascending ? .forward : .reverse)]
         case .status:
-            descriptor.sortBy = [SortDescriptor(\.status, order: ascending ? .forward : .reverse)]
-        case .crewSize:
-            descriptor.sortBy = [SortDescriptor(\.crewSize, order: ascending ? .forward : .reverse)]
+            descriptor.sortBy = [SortDescriptor(\.status.rawValue, order: ascending ? .forward : .reverse)]
+        case .crewMembers:
+            descriptor.sortBy = [SortDescriptor(\.crewMembers, order: ascending ? .forward : .reverse)]
         }
         
-        return try fetch(Installation.self, descriptor: descriptor)
+        // Fetch all installations and filter
+        let allInstallations = try modelContext.fetch(descriptor)
+        
+        // Filter by user, date range, and status
+        return allInstallations.filter { installation in
+            guard let installationUser = installation.user else { return false }
+            guard installationUser.id == user.id else { return false }
+            
+            if let startDate = startDate, installation.scheduledDate < startDate {
+                return false
+            }
+            
+            if let endDate = endDate, installation.scheduledDate > endDate {
+                return false
+            }
+            
+            if let status = status, installation.status != status {
+                return false
+            }
+            
+            return true
+        }
     }
     
     // MARK: - Analytics Operations
     
-    func getJobStatistics() throws -> JobStatistics {
-        let jobs = try fetchJobs()
+    func getJobStatistics(for user: User) throws -> JobStatistics {
+        let jobs = try fetchJobs(for: user)
         
         let totalJobs = jobs.count
         let activeJobs = jobs.filter { $0.status == .inProgress }.count
@@ -344,8 +403,8 @@ class DataService {
         )
     }
     
-    func getEquipmentStatistics() throws -> EquipmentStatistics {
-        let equipment = try fetchEquipment()
+    func getEquipmentStatistics(for user: User) throws -> EquipmentStatistics {
+        let equipment = try fetchEquipment(for: user)
         
         let totalItems = equipment.count
         let totalValue = equipment.reduce(0) { $0 + ($1.unitPrice * Double($1.quantity)) }
@@ -359,6 +418,69 @@ class DataService {
             outOfStockCount: outOfStockItems.count,
             lowStockItems: lowStockItems
         )
+    }
+    
+    // MARK: - Utility Methods
+    
+    func deleteUserData(for user: User) throws {
+        // Delete all user's data
+        let jobs = try fetchJobs(for: user)
+        let customers = try fetchCustomers(for: user)
+        let equipment = try fetchEquipment(for: user)
+        let installations = try fetchInstallations(for: user)
+        
+        for job in jobs {
+            modelContext.delete(job)
+        }
+        for customer in customers {
+            modelContext.delete(customer)
+        }
+        for item in equipment {
+            modelContext.delete(item)
+        }
+        for installation in installations {
+            modelContext.delete(installation)
+        }
+        
+        modelContext.delete(user)
+        try save()
+    }
+    
+    func getUserDashboardData(for user: User) throws -> UserDashboardData {
+        let jobs = try fetchJobs(for: user, limit: 10)
+        let customers = try fetchCustomers(for: user, limit: 10)
+        let installations = try fetchInstallations(for: user)
+        let lowStockEquipment = try fetchEquipment(for: user, lowStockOnly: true)
+        
+        return UserDashboardData(
+            recentJobs: jobs,
+            recentCustomers: customers,
+            upcomingInstallations: installations,
+            lowStockEquipment: lowStockEquipment
+        )
+    }
+    
+    func transferDataToUser(from oldUser: User, to newUser: User) throws {
+        let jobs = try fetchJobs(for: oldUser)
+        let customers = try fetchCustomers(for: oldUser)
+        let equipment = try fetchEquipment(for: oldUser)
+        let installations = try fetchInstallations(for: oldUser)
+        
+        // Transfer ownership
+        for job in jobs {
+            job.user = newUser
+        }
+        for customer in customers {
+            customer.user = newUser
+        }
+        for item in equipment {
+            item.user = newUser
+        }
+        for installation in installations {
+            installation.user = newUser
+        }
+        
+        try save()
     }
 }
 
@@ -387,7 +509,7 @@ enum EquipmentSortBy {
 enum InstallationSortBy {
     case scheduledDate
     case status
-    case crewSize
+    case crewMembers
 }
 
 struct JobStatistics {
@@ -407,4 +529,11 @@ struct EquipmentStatistics {
     let lowStockCount: Int
     let outOfStockCount: Int
     let lowStockItems: [Equipment]
+}
+
+struct UserDashboardData {
+    let recentJobs: [SolarJob]
+    let recentCustomers: [Customer]
+    let upcomingInstallations: [Installation]
+    let lowStockEquipment: [Equipment]
 }

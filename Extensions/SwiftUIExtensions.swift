@@ -1,5 +1,27 @@
 import SwiftUI
 
+// MARK: - Platform-specific imports
+#if os(iOS)
+import UIKit
+#elseif os(macOS)
+import AppKit
+#endif
+
+// MARK: - Color Extensions for Cross-Platform Support
+extension Color {
+    #if os(iOS)
+    static let systemBackground = Color(UIColor.systemBackground)
+    static let secondarySystemBackground = Color(UIColor.secondarySystemBackground)
+    static let systemGray6 = Color(UIColor.systemGray6)
+    static let secondaryBackground = Color(UIColor.secondarySystemBackground)
+    #elseif os(macOS)
+    static let systemBackground = Color(NSColor.windowBackgroundColor)
+    static let secondarySystemBackground = Color(NSColor.controlBackgroundColor)
+    static let systemGray6 = Color(NSColor.quaternaryLabelColor)
+    static let secondaryBackground = Color(NSColor.controlBackgroundColor)
+    #endif
+}
+
 // MARK: - SwiftUI Extensions for Enhanced UX
 
 extension View {
@@ -10,7 +32,7 @@ extension View {
             .opacity(0)
             .onAppear {
                 withAnimation(.spring(response: 0.6, dampingFraction: 0.7).delay(delay)) {
-                    self
+                    // Animation will be handled by the .animation modifier
                 }
             }
             .animation(.spring(response: 0.6, dampingFraction: 0.7).delay(delay), value: true)
@@ -141,7 +163,7 @@ struct LoadingCardView: View {
             }
         }
         .padding()
-        .background(Color(UIColor.secondarySystemBackground))
+        .background(Color.secondarySystemBackground)
         .cornerRadius(12)
     }
 }
@@ -261,7 +283,7 @@ struct EnhancedCard<Content: View>: View {
             .padding()
             .background(
                 RoundedRectangle(cornerRadius: 16)
-                    .fill(Color(UIColor.secondarySystemBackground))
+                    .fill(Color.secondarySystemBackground)
                     .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 4)
             )
             .scaleEffect(isVisible ? 1.0 : 0.9)
@@ -273,3 +295,280 @@ struct EnhancedCard<Content: View>: View {
             }
     }
 }
+
+// MARK: - Search Components
+
+struct SearchBar: View {
+    @Binding var text: String
+    var placeholder: String = "Search..."
+    
+    var body: some View {
+        HStack {
+            Image(systemName: "magnifyingglass")
+                .foregroundColor(.secondary)
+            
+            TextField(placeholder, text: $text)
+                .textFieldStyle(PlainTextFieldStyle())
+            
+            if !text.isEmpty {
+                Button(action: {
+                    text = ""
+                }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.systemGray6)
+        .cornerRadius(10)
+    }
+}
+
+// MARK: - Section Header
+
+struct SectionHeader: View {
+    let title: String
+    
+    var body: some View {
+        HStack {
+            Text(title)
+                .font(.headline)
+                .fontWeight(.semibold)
+                .foregroundColor(.primary)
+            Spacer()
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+    }
+}
+
+// MARK: - Action Button
+
+struct ActionButton: View {
+    let title: String
+    let icon: String
+    let color: Color
+    let action: () -> Void
+    
+    var body: some View {
+        Button(action: action) {
+            HStack {
+                Image(systemName: icon)
+                    .font(.body)
+                    .foregroundColor(.white)
+                
+                Text(title)
+                    .font(.body)
+                    .fontWeight(.medium)
+                    .foregroundColor(.white)
+                
+                Spacer()
+            }
+            .padding()
+            .background(color)
+            .cornerRadius(12)
+        }
+        .buttonStyle(BouncyButtonStyle())
+    }
+}
+
+// MARK: - Status Badge
+
+struct StatusBadge: View {
+    let status: String
+    let color: Color
+    
+    var body: some View {
+        Text(status)
+            .font(.caption)
+            .fontWeight(.medium)
+            .foregroundColor(.white)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(color)
+            .cornerRadius(8)
+    }
+}
+
+// MARK: - Filter Chip
+
+struct FilterChip: View {
+    let title: String
+    let isSelected: Bool
+    let count: Int?
+    let action: () -> Void
+    
+    init(title: String, isSelected: Bool, count: Int? = nil, action: @escaping () -> Void) {
+        self.title = title
+        self.isSelected = isSelected
+        self.count = count
+        self.action = action
+    }
+    
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Text(title)
+                    .font(.caption)
+                    .fontWeight(.medium)
+                
+                if let count = count {
+                    Text("(\(count))")
+                        .font(.caption2)
+                        .fontWeight(.regular)
+                }
+            }
+            .foregroundColor(isSelected ? .white : .primary)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(isSelected ? Color.orange : Color.clear)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16)
+                            .stroke(Color.orange, lineWidth: 1)
+                    )
+            )
+        }
+        .buttonStyle(BouncyButtonStyle())
+    }
+}
+
+// MARK: - Equipment Image View
+
+struct EquipmentImageView: View {
+    let imageData: Data?
+    let size: CGFloat
+    
+    init(imageData: Data?, size: CGFloat = 60) {
+        self.imageData = imageData
+        self.size = size
+    }
+    
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.gray.opacity(0.2))
+                .frame(width: size, height: size)
+            
+            #if os(iOS)
+            if let imageData = imageData, let uiImage = UIImage(data: imageData) {
+                Image(uiImage: uiImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: size, height: size)
+                    .clipped()
+                    .cornerRadius(8)
+            } else {
+                Image(systemName: "photo")
+                    .font(.system(size: size * 0.4))
+                    .foregroundColor(.gray)
+            }
+            #elseif os(macOS)
+            if let imageData = imageData, let nsImage = NSImage(data: imageData) {
+                Image(nsImage: nsImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: size, height: size)
+                    .clipped()
+                    .cornerRadius(8)
+            } else {
+                Image(systemName: "photo")
+                    .font(.system(size: size * 0.4))
+                    .foregroundColor(.gray)
+            }
+            #endif
+        }
+    }
+}
+
+#if os(iOS)
+// MARK: - Image Picker for Photo Library
+
+struct ImagePicker: UIViewControllerRepresentable {
+    @Binding var image: UIImage?
+    @Environment(\.dismiss) private var dismiss
+    
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.delegate = context.coordinator
+        picker.allowsEditing = true
+        picker.sourceType = .photoLibrary
+        return picker
+    }
+    
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+    
+    class Coordinator: NSObject, UINavigationControllerDelegate, UIImagePickerControllerDelegate {
+        let parent: ImagePicker
+        
+        init(_ parent: ImagePicker) {
+            self.parent = parent
+        }
+        
+        func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey : Any]) {
+            if let editedImage = info[.editedImage] as? UIImage {
+                parent.image = editedImage
+            } else if let originalImage = info[.originalImage] as? UIImage {
+                parent.image = originalImage
+            }
+            
+            parent.dismiss()
+        }
+        
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            parent.dismiss()
+        }
+    }
+}
+
+// MARK: - Camera Image Picker
+
+struct CameraImagePicker: UIViewControllerRepresentable {
+    @Binding var image: UIImage?
+    @Environment(\.dismiss) private var dismiss
+    
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.delegate = context.coordinator
+        picker.allowsEditing = true
+        picker.sourceType = .camera
+        return picker
+    }
+    
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+    
+    class Coordinator: NSObject, UINavigationControllerDelegate, UIImagePickerControllerDelegate {
+        let parent: CameraImagePicker
+        
+        init(_ parent: CameraImagePicker) {
+            self.parent = parent
+        }
+        
+        func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey : Any]) {
+            if let editedImage = info[.editedImage] as? UIImage {
+                parent.image = editedImage
+            } else if let originalImage = info[.originalImage] as? UIImage {
+                parent.image = originalImage
+            }
+            
+            parent.dismiss()
+        }
+        
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            parent.dismiss()
+        }
+    }
+}
+
+#endif

@@ -1,4 +1,5 @@
 import Foundation
+import SwiftData
 
 class ValidationService {
     static let shared = ValidationService()

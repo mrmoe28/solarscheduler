@@ -3,20 +3,28 @@ import SwiftData
 
 struct InstallationCalendarView: View {
     @Environment(\.viewModelContainer) private var viewModelContainer
+    @Environment(\.modelContext) private var modelContext
     @State private var selectedDate = Date()
     @State private var showingMonth = true
+    @State private var viewModel: InstallationsViewModel?
     
-    private var viewModel: InstallationsViewModel {
-        viewModelContainer?.installationsViewModel ?? InstallationsViewModel(
-            dataService: DataService(modelContext: ModelContext(for: Schema([
-                Installation.self, SolarJob.self, Customer.self, Equipment.self, Vendor.self, Contract.self
-            ])))
-        )
+    private var currentViewModel: InstallationsViewModel {
+        if let vm = viewModel {
+            return vm
+        } else {
+            if let container = viewModelContainer {
+                return container.installationsViewModel
+            } else {
+                let dataService = DataService(modelContext: modelContext)
+                let newViewModel = InstallationsViewModel(dataService: dataService)
+                viewModel = newViewModel
+                return newViewModel
+            }
+        }
     }
     
     var body: some View {
-        NavigationView {
-            VStack(spacing: 0) {
+        VStack(spacing: 0) {
                 // Calendar Header
                 HStack {
                     Button(action: {
@@ -43,7 +51,7 @@ struct InstallationCalendarView: View {
                 if showingMonth {
                     CalendarMonthView(
                         selectedDate: $selectedDate,
-                        installations: viewModel.installations,
+                        installations: currentViewModel.installations,
                         onDateSelected: { date in
                             selectedDate = date
                         }
@@ -51,7 +59,7 @@ struct InstallationCalendarView: View {
                 } else {
                     CalendarWeekView(
                         selectedDate: $selectedDate,
-                        installations: viewModel.installations,
+                        installations: currentViewModel.installations,
                         onDateSelected: { date in
                             selectedDate = date
                         }
@@ -64,7 +72,7 @@ struct InstallationCalendarView: View {
                         .font(.headline)
                         .padding(.horizontal)
                     
-                    let dayInstallations = viewModel.getInstallations(for: selectedDate)
+                    let dayInstallations = currentViewModel.getInstallations(for: selectedDate)
                     
                     if dayInstallations.isEmpty {
                         VStack(spacing: 12) {
@@ -73,7 +81,7 @@ struct InstallationCalendarView: View {
                                 .padding(.horizontal)
                             
                             // Show all upcoming installations if none today
-                            let upcomingInstallations = viewModel.getUpcomingInstallations()
+                            let upcomingInstallations = currentViewModel.getUpcomingInstallations()
                             if !upcomingInstallations.isEmpty {
                                 Text("Upcoming Installations:")
                                     .font(.headline)
@@ -111,19 +119,41 @@ struct InstallationCalendarView: View {
             }
             .navigationTitle("Installation Calendar")
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(action: { viewModel.showAddInstallation() }) {
+                ToolbarItem(placement: .automatic) {
+                    Button(action: { currentViewModel.showAddInstallation() }) {
                         Image(systemName: "plus")
+                            .font(.title2)
+                            .fontWeight(.semibold)
                     }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
                 }
             }
-            .sheet(isPresented: $viewModel.showingAddInstallation) {
-                AddInstallationView(viewModel: viewModel)
+            .sheet(isPresented: Binding(
+                get: { currentViewModel.showingAddInstallation },
+                set: { currentViewModel.showingAddInstallation = $0 }
+            )) {
+                NavigationStack {
+                    AddInstallationView(viewModel: currentViewModel)
+                }
             }
             .onAppear {
-                viewModel.loadData()
+                currentViewModel.loadData()
             }
-        }
+            .overlay(alignment: .bottomTrailing) {
+                Button(action: { currentViewModel.showAddInstallation() }) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 24, weight: .bold))
+                        .foregroundColor(.white)
+                        .frame(width: 60, height: 60)
+                        .background(Color.orange)
+                        .clipShape(Circle())
+                        .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)
+                }
+                .padding(.trailing, 16)
+                .padding(.bottom, 100)
+                .zIndex(1000)
+            }
     }
 }
 
@@ -376,7 +406,7 @@ struct InstallationCalendarRowView: View {
                         .foregroundColor(.secondary)
                 }
                 
-                Text("Crew: \(installation.crewSize) • \(installation.status.rawValue)")
+                Text("Crew: \(installation.crewMembers.split(separator: ",").count) • \(installation.status.rawValue)")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -396,7 +426,7 @@ struct InstallationCalendarRowView: View {
         }
         .padding(.vertical, 8)
         .padding(.horizontal)
-        .background(Color(UIColor.secondarySystemBackground))
+        .background(Color.secondarySystemBackground)
         .cornerRadius(12)
     }
 }

@@ -6,6 +6,7 @@ class EquipmentViewModel {
     private let dataService: DataService
     private let validationService: ValidationService
     private let notificationService: NotificationService
+    private let userSession: UserSession
     
     // Data
     var equipment: [Equipment] = []
@@ -14,31 +15,11 @@ class EquipmentViewModel {
     // UI State
     var isLoading = false
     var errorMessage: String?
-    var searchText = "" {
-        didSet {
-            applyFilters()
-        }
-    }
-    var selectedCategory: EquipmentCategory? {
-        didSet {
-            applyFilters()
-        }
-    }
-    var showLowStockOnly = false {
-        didSet {
-            applyFilters()
-        }
-    }
-    var sortBy: EquipmentSortBy = .name {
-        didSet {
-            applyFilters()
-        }
-    }
-    var sortAscending = true {
-        didSet {
-            applyFilters()
-        }
-    }
+    var searchText = ""
+    var selectedCategory: EquipmentCategory?
+    var showLowStockOnly = false
+    var sortBy: EquipmentSortBy = .name
+    var sortAscending = true
     
     // Form State
     var showingAddEquipment = false
@@ -54,13 +35,19 @@ class EquipmentViewModel {
     var newEquipmentUnitCost = 0.0
     var newEquipmentMinimumStock = 0
     var newEquipmentDescription = ""
+    var newEquipmentImageData: Data?
     var formErrors: [ValidationService.ValidationError] = []
     
-    init(dataService: DataService, validationService: ValidationService = .shared, notificationService: NotificationService = .shared) {
+    init(dataService: DataService, validationService: ValidationService = .shared, notificationService: NotificationService = .shared, userSession: UserSession = .shared) {
         self.dataService = dataService
         self.validationService = validationService
         self.notificationService = notificationService
+        self.userSession = userSession
         loadEquipment()
+    }
+    
+    private var currentUser: User? {
+        userSession.currentUser
     }
     
     // MARK: - Data Loading
@@ -70,8 +57,15 @@ class EquipmentViewModel {
             isLoading = true
             errorMessage = nil
             
+            guard let user = currentUser else {
+                errorMessage = "No user signed in"
+                isLoading = false
+                return
+            }
+            
             do {
                 equipment = try dataService.fetchEquipment(
+                    for: user,
                     sortBy: sortBy,
                     ascending: sortAscending
                 )
@@ -140,6 +134,11 @@ class EquipmentViewModel {
             return
         }
         
+        guard let user = currentUser else {
+            errorMessage = "No user signed in"
+            return
+        }
+        
         Task { @MainActor in
             do {
                 let equipment = try dataService.createEquipment(
@@ -147,12 +146,16 @@ class EquipmentViewModel {
                     category: newEquipmentCategory,
                     brand: newEquipmentBrand,
                     model: newEquipmentModel,
+                    manufacturer: newEquipmentBrand,
                     quantity: newEquipmentQuantity,
+                    unitPrice: newEquipmentUnitCost,
                     unitCost: newEquipmentUnitCost,
-                    minimumStock: newEquipmentMinimumStock
+                    minimumStock: newEquipmentMinimumStock,
+                    user: user
                 )
                 
                 equipment.equipmentDescription = newEquipmentDescription
+                equipment.imageData = newEquipmentImageData
                 try dataService.save()
                 
                 notificationService.notifyDataSaveSuccess("Equipment added successfully")
@@ -180,6 +183,44 @@ class EquipmentViewModel {
         }
     }
     
+    func updateEquipmentWithImage(
+        _ equipment: Equipment,
+        name: String,
+        manufacturer: String,
+        model: String,
+        category: String,
+        minimumStock: Int,
+        unitPrice: Double,
+        description: String,
+        imageData: Data?
+    ) {
+        Task { @MainActor in
+            do {
+                equipment.name = name
+                equipment.manufacturer = manufacturer
+                equipment.model = model
+                equipment.brand = manufacturer
+                
+                // Convert category string to enum
+                if let equipmentCategory = EquipmentCategory.allCases.first(where: { $0.rawValue == category }) {
+                    equipment.category = equipmentCategory
+                }
+                
+                equipment.minimumStock = minimumStock
+                equipment.unitPrice = unitPrice
+                equipment.equipmentDescription = description
+                equipment.imageData = imageData
+                
+                try dataService.save()
+                notificationService.notifyDataSaveSuccess("Equipment updated successfully")
+                loadEquipment()
+            } catch {
+                errorMessage = "Failed to update equipment: \(error.localizedDescription)"
+                notificationService.notifyDataSaveError(error)
+            }
+        }
+    }
+    
     func deleteEquipment(_ equipment: Equipment) {
         Task { @MainActor in
             do {
@@ -194,7 +235,7 @@ class EquipmentViewModel {
     }
     
     func updateEquipmentQuantity(_ equipment: Equipment, newQuantity: Int) {
-        let validation = validationService.validateEquipmentUsage(
+        let _ = validationService.validateEquipmentUsage(
             equipment: equipment,
             requestedQuantity: abs(equipment.quantity - newQuantity)
         )
@@ -319,6 +360,43 @@ class EquipmentViewModel {
         applyFilters()
     }
     
+    // MARK: - Manual Filter Updates
+    
+    func updateSearchText(_ text: String) {
+        searchText = text
+        Task { @MainActor in
+            applyFilters()
+        }
+    }
+    
+    func updateSelectedCategory(_ category: EquipmentCategory?) {
+        selectedCategory = category
+        Task { @MainActor in
+            applyFilters()
+        }
+    }
+    
+    func updateShowLowStockOnly(_ show: Bool) {
+        showLowStockOnly = show
+        Task { @MainActor in
+            applyFilters()
+        }
+    }
+    
+    func updateSortBy(_ sort: EquipmentSortBy) {
+        sortBy = sort
+        Task { @MainActor in
+            applyFilters()
+        }
+    }
+    
+    func updateSortAscending(_ ascending: Bool) {
+        sortAscending = ascending
+        Task { @MainActor in
+            applyFilters()
+        }
+    }
+    
     func getEquipmentCount(for category: EquipmentCategory) -> Int {
         equipment.filter { $0.category == category }.count
     }
@@ -338,6 +416,7 @@ class EquipmentViewModel {
         newEquipmentUnitCost = 0.0
         newEquipmentMinimumStock = 0
         newEquipmentDescription = ""
+        newEquipmentImageData = nil
         formErrors = []
     }
     

@@ -6,6 +6,7 @@ class JobsViewModel {
     private let dataService: DataService
     private let validationService: ValidationService
     private let notificationService: NotificationService
+    private let userSession: UserSession
     
     // Data
     var jobs: [SolarJob] = []
@@ -14,26 +15,10 @@ class JobsViewModel {
     // UI State
     var isLoading = false
     var errorMessage: String?
-    var searchText = "" {
-        didSet {
-            applyFilters()
-        }
-    }
-    var selectedStatus: JobStatus? {
-        didSet {
-            applyFilters()
-        }
-    }
-    var sortBy: SortBy = .createdDate {
-        didSet {
-            applyFilters()
-        }
-    }
-    var sortAscending = false {
-        didSet {
-            applyFilters()
-        }
-    }
+    var searchText = ""
+    var selectedStatus: JobStatus?
+    var sortBy: SortBy = .createdDate
+    var sortAscending = false
     
     // Form State
     var showingAddJob = false
@@ -49,11 +34,16 @@ class JobsViewModel {
     var newJobNotes = ""
     var formErrors: [ValidationService.ValidationError] = []
     
-    init(dataService: DataService, validationService: ValidationService = .shared, notificationService: NotificationService = .shared) {
+    init(dataService: DataService, validationService: ValidationService = .shared, notificationService: NotificationService = .shared, userSession: UserSession = .shared) {
         self.dataService = dataService
         self.validationService = validationService
         self.notificationService = notificationService
+        self.userSession = userSession
         loadJobs()
+    }
+    
+    private var currentUser: User? {
+        userSession.currentUser
     }
     
     // MARK: - Data Loading
@@ -63,8 +53,15 @@ class JobsViewModel {
             isLoading = true
             errorMessage = nil
             
+            guard let user = currentUser else {
+                errorMessage = "No user signed in"
+                isLoading = false
+                return
+            }
+            
             do {
                 jobs = try dataService.fetchJobs(
+                    for: user,
                     sortBy: sortBy,
                     ascending: sortAscending
                 )
@@ -127,6 +124,11 @@ class JobsViewModel {
             return
         }
         
+        guard let user = currentUser else {
+            errorMessage = "No user signed in"
+            return
+        }
+        
         Task { @MainActor in
             do {
                 let job = try dataService.createJob(
@@ -134,7 +136,8 @@ class JobsViewModel {
                     address: newJobAddress,
                     systemSize: newJobSystemSize,
                     estimatedRevenue: newJobEstimatedRevenue,
-                    notes: newJobNotes
+                    notes: newJobNotes,
+                    user: user
                 )
                 
                 if let scheduledDate = newJobScheduledDate {
@@ -216,11 +219,16 @@ class JobsViewModel {
     
     func searchJobs(_ query: String) {
         Task { @MainActor in
+            guard let user = currentUser else {
+                errorMessage = "No user signed in"
+                return
+            }
+            
             do {
                 if query.isEmpty {
                     loadJobs()
                 } else {
-                    jobs = try dataService.searchJobs(query: query)
+                    jobs = try dataService.searchJobs(for: user, query: query)
                     applyFilters()
                 }
             } catch {
@@ -235,6 +243,36 @@ class JobsViewModel {
         sortBy = .createdDate
         sortAscending = false
         applyFilters()
+    }
+    
+    // MARK: - Manual Filter Updates
+    
+    func updateSearchText(_ text: String) {
+        searchText = text
+        Task { @MainActor in
+            applyFilters()
+        }
+    }
+    
+    func updateSelectedStatus(_ status: JobStatus?) {
+        selectedStatus = status
+        Task { @MainActor in
+            applyFilters()
+        }
+    }
+    
+    func updateSortBy(_ sort: SortBy) {
+        sortBy = sort
+        Task { @MainActor in
+            applyFilters()
+        }
+    }
+    
+    func updateSortAscending(_ ascending: Bool) {
+        sortAscending = ascending
+        Task { @MainActor in
+            applyFilters()
+        }
     }
     
     func getJobsCount(for status: JobStatus) -> Int {

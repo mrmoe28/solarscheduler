@@ -2,6 +2,13 @@ import Foundation
 import UserNotifications
 import SwiftUI
 
+// MARK: - Platform-specific imports
+#if os(iOS)
+import UIKit
+#elseif os(macOS)
+import AppKit
+#endif
+
 @Observable
 class NotificationService {
     static let shared = NotificationService()
@@ -203,7 +210,7 @@ class NotificationService {
     func notifyJobCompleted(_ job: SolarJob) {
         let notification = AppNotification(
             title: "Job Completed",
-            message: "\(job.customerName)'s installation is complete! Revenue: $\(job.estimatedRevenue.safeValue, specifier: "%.0f")",
+            message: "\(job.customerName)'s installation is complete! Revenue: $\(String(format: "%.0f", job.estimatedRevenue.safeValue))",
             type: .success,
             duration: 5.0
         )
@@ -381,7 +388,7 @@ struct InAppNotificationView: View {
             .buttonStyle(.plain)
         }
         .padding()
-        .background(Color(UIColor.secondarySystemBackground))
+        .background(Color.secondarySystemBackground)
         .cornerRadius(12)
         .shadow(radius: 4)
         .padding(.horizontal)
@@ -391,7 +398,7 @@ struct InAppNotificationView: View {
 // MARK: - Notification Overlay
 
 struct NotificationOverlay: View {
-    @ObservedObject private var notificationService = NotificationService.shared
+    @State private var notificationService = NotificationService.shared
     
     var body: some View {
         VStack {

@@ -5,6 +5,7 @@ struct AddJobView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
     @Query private var customers: [Customer]
+    @State private var userSession = UserSession.shared
     
     // Form state
     @State private var customerName = ""
@@ -16,6 +17,14 @@ struct AddJobView: View {
     @State private var hasScheduledDate = false
     @State private var estimatedRevenue = ""
     @State private var notes = ""
+    
+    // Site Visit state
+    @State private var hasSiteVisit = false
+    @State private var siteVisitDate = Date()
+    @State private var siteVisitNotes = ""
+    @State private var sitePhotos: [Data] = []
+    @State private var showingImagePicker = false
+    @State private var showingCamera = false
     
     // UI state
     @State private var showingCustomerPicker = false
@@ -54,7 +63,7 @@ struct AddJobView: View {
                                     .foregroundColor(.secondary)
                             } else {
                                 Text("Select Customer")
-                                    .foregroundColor(.blue)
+                                    .foregroundColor(Color.blue)
                             }
                         }
                         .contentShape(Rectangle())
@@ -106,6 +115,80 @@ struct AddJobView: View {
                     }
                 }
                 
+                // Site Visit
+                Section("Site Visit") {
+                    Toggle("Schedule Site Visit", isOn: $hasSiteVisit)
+                    
+                    if hasSiteVisit {
+                        DatePicker("Visit Date", selection: $siteVisitDate, in: Date()..., displayedComponents: [.date])
+                        
+                        TextField("Site Visit Notes", text: $siteVisitNotes, axis: .vertical)
+                            .lineLimit(2...4)
+                        
+                        // Photos Section
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Site Photos")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 8) {
+                                    // Existing photos
+                                    ForEach(Array(sitePhotos.enumerated()), id: \.offset) { index, photoData in
+                                        ZStack(alignment: .topTrailing) {
+                                            if let image = UIImage(data: photoData) {
+                                                Image(uiImage: image)
+                                                    .resizable()
+                                                    .scaledToFill()
+                                                    .frame(width: 80, height: 80)
+                                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                                            }
+                                            
+                                            Button(action: {
+                                                sitePhotos.remove(at: index)
+                                            }) {
+                                                Image(systemName: "xmark.circle.fill")
+                                                    .foregroundColor(.white)
+                                                    .background(Color.black.opacity(0.6))
+                                                    .clipShape(Circle())
+                                            }
+                                            .padding(4)
+                                        }
+                                    }
+                                    
+                                    // Add photo buttons
+                                    Menu {
+                                        Button(action: { showingCamera = true }) {
+                                            Label("Take Photo", systemImage: "camera")
+                                        }
+                                        
+                                        Button(action: { showingImagePicker = true }) {
+                                            Label("Choose from Library", systemImage: "photo")
+                                        }
+                                    } label: {
+                                        VStack {
+                                            Image(systemName: "plus")
+                                                .font(.title2)
+                                                .foregroundColor(.blue)
+                                            Text("Add Photo")
+                                                .font(.caption)
+                                                .foregroundColor(.blue)
+                                        }
+                                        .frame(width: 80, height: 80)
+                                        .background(Color.gray.opacity(0.1))
+                                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 8)
+                                                .stroke(style: StrokeStyle(lineWidth: 2, dash: [5]))
+                                                .foregroundColor(.blue)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                
                 // Additional Information
                 Section("Additional Notes") {
                     TextField("Notes", text: $notes, axis: .vertical)
@@ -114,6 +197,13 @@ struct AddJobView: View {
             }
             .navigationTitle(jobToEdit == nil ? "New Solar Job" : "Edit Job")
             .navigationBarTitleDisplayMode(.inline)
+            .onAppear {
+                // Ensure UserSession is configured
+                if userSession.currentUser == nil {
+                    userSession.configure(with: modelContext)
+                }
+                print("👤 Current user: \(userSession.currentUser?.fullName ?? "None")")
+            }
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("Cancel") {
@@ -140,6 +230,14 @@ struct AddJobView: View {
             } message: {
                 Text(alertMessage)
             }
+            #if os(iOS)
+            .sheet(isPresented: $showingImagePicker) {
+                ImagePicker(images: $sitePhotos, sourceType: .photoLibrary)
+            }
+            .sheet(isPresented: $showingCamera) {
+                ImagePicker(images: $sitePhotos, sourceType: .camera)
+            }
+            #endif
         }
     }
     
@@ -187,6 +285,14 @@ struct AddJobView: View {
         
         estimatedRevenue = job.estimatedRevenue > 0 ? String(job.estimatedRevenue) : ""
         notes = job.notes
+        
+        // Load site visit data
+        if let siteVisitDate = job.siteVisitDate {
+            hasSiteVisit = true
+            self.siteVisitDate = siteVisitDate
+            siteVisitNotes = job.siteVisitNotes ?? ""
+            sitePhotos = job.sitePhotos ?? []
+        }
     }
     
     private func saveJob() {
@@ -202,6 +308,14 @@ struct AddJobView: View {
             return
         }
         
+        // Check if user is logged in
+        guard userSession.currentUser != nil else {
+            alertMessage = "You must be logged in to create a job."
+            showingAlert = true
+            print("❌ Error: No current user found in session")
+            return
+        }
+        
         let revenueValue = Double(estimatedRevenue) ?? 0.0
         
         do {
@@ -214,9 +328,11 @@ struct AddJobView: View {
             }
             
             try modelContext.save()
+            print("✅ Job saved successfully")
             dismiss()
             
         } catch {
+            print("❌ Failed to save job: \(error)")
             alertMessage = "Failed to save job: \(error.localizedDescription)"
             showingAlert = true
         }
@@ -237,6 +353,17 @@ struct AddJobView: View {
         job.scheduledDate = hasScheduledDate ? scheduledDate : nil
         job.estimatedRevenue = revenue
         job.notes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // Update site visit data
+        if hasSiteVisit {
+            job.siteVisitDate = siteVisitDate
+            job.siteVisitNotes = siteVisitNotes
+            job.sitePhotos = sitePhotos
+        } else {
+            job.siteVisitDate = nil
+            job.siteVisitNotes = ""
+            job.sitePhotos = []
+        }
     }
     
     private func createNewJob(systemSize: Double, revenue: Double) {
@@ -253,6 +380,16 @@ struct AddJobView: View {
         if !isNewCustomer, let selectedCustomer = selectedCustomer {
             job.customer = selectedCustomer
         }
+        
+        // Add site visit data
+        if hasSiteVisit {
+            job.siteVisitDate = siteVisitDate
+            job.siteVisitNotes = siteVisitNotes
+            job.sitePhotos = sitePhotos
+        }
+        
+        // Associate with current user
+        job.user = userSession.currentUser
         
         modelContext.insert(job)
     }
@@ -302,7 +439,7 @@ struct CustomerPickerView: View {
                         
                         if selectedCustomer?.id == customer.id {
                             Image(systemName: "checkmark.circle.fill")
-                                .foregroundColor(.blue)
+                                .foregroundColor(Color.blue)
                         }
                     }
                     .contentShape(Rectangle())
@@ -352,3 +489,48 @@ struct CustomerPickerView: View {
     return AddJobView(jobToEdit: job)
         .modelContainer(for: [SolarJob.self, Customer.self])
 }
+
+// MARK: - Image Picker for iOS
+#if os(iOS)
+import PhotosUI
+
+struct ImagePicker: UIViewControllerRepresentable {
+    @Binding var images: [Data]
+    let sourceType: UIImagePickerController.SourceType
+    @Environment(\.dismiss) private var dismiss
+    
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = sourceType
+        picker.delegate = context.coordinator
+        picker.allowsEditing = false
+        return picker
+    }
+    
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+    
+    class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+        let parent: ImagePicker
+        
+        init(_ parent: ImagePicker) {
+            self.parent = parent
+        }
+        
+        func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey : Any]) {
+            if let image = info[.originalImage] as? UIImage,
+               let imageData = image.jpegData(compressionQuality: 0.7) {
+                parent.images.append(imageData)
+            }
+            parent.dismiss()
+        }
+        
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            parent.dismiss()
+        }
+    }
+}
+#endif

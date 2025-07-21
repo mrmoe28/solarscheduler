@@ -1,5 +1,12 @@
 import SwiftUI
 import SwiftData
+#if canImport(UIKit)
+import UIKit
+typealias PlatformImage = UIImage
+#elseif os(macOS)
+import AppKit
+typealias PlatformImage = NSImage
+#endif
 
 struct InventoryListView: View {
     @Environment(\.viewModelContainer) private var viewModelContainer
@@ -10,16 +17,22 @@ struct InventoryListView: View {
     @State private var showingItemDetail = false
     @State private var showingLowStockOnly = false
     
-    private var viewModel: EquipmentViewModel {
-        viewModelContainer?.equipmentViewModel ?? EquipmentViewModel(
-            dataService: DataService(modelContext: ModelContext(for: Schema([
-                SolarJob.self, Customer.self, Equipment.self, Installation.self, Vendor.self, Contract.self
-            ])))
-        )
+    @Environment(\.modelContext) private var modelContext
+    @State private var viewModel: EquipmentViewModel?
+    
+    private var currentViewModel: EquipmentViewModel {
+        if let vm = viewModel {
+            return vm
+        } else {
+            let dataService = DataService(modelContext: modelContext)
+            let newViewModel = EquipmentViewModel(dataService: dataService)
+            viewModel = newViewModel
+            return newViewModel
+        }
     }
     
     private var filteredInventory: [Equipment] {
-        var items = viewModel.equipment
+        var items = currentViewModel.equipment
         
         // Apply category filter
         if selectedCategory != .all {
@@ -28,17 +41,17 @@ struct InventoryListView: View {
                 case .all:
                     return true
                 case .panels:
-                    return equipment.category == "Solar Panels"
+                    return equipment.category == .solarPanels
                 case .inverters:
-                    return equipment.category == "Inverters"
+                    return equipment.category == .inverters
                 case .batteries:
-                    return equipment.category == "Batteries"
+                    return equipment.category == .batteries
                 case .mounting:
-                    return equipment.category == "Mounting"
+                    return equipment.category == .mounting
                 case .electrical:
-                    return equipment.category == "Electrical"
+                    return equipment.category == .electrical
                 case .tools:
-                    return equipment.category == "Tools"
+                    return equipment.category == .tools
                 }
             }
         }
@@ -77,7 +90,7 @@ struct InventoryListView: View {
                 .padding(.horizontal)
                 .padding(.top, 8)
                 
-                if viewModel.isLoading {
+                if currentViewModel.isLoading {
                     InventoryLoadingView()
                 } else if filteredInventory.isEmpty {
                     EmptyInventoryView(
@@ -100,9 +113,11 @@ struct InventoryListView: View {
                 Spacer()
             }
             .navigationTitle("Inventory")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.large)
+            #endif
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItem(placement: .automatic) {
                     Button(action: {
                         showingAddItem = true
                     }) {
@@ -115,16 +130,16 @@ struct InventoryListView: View {
                 }
             }
             .refreshable {
-                viewModel.refreshData()
+                currentViewModel.loadEquipment()
             }
             .onAppear {
-                viewModel.refreshData()
+                currentViewModel.loadEquipment()
             }
         .sheet(isPresented: $showingAddItem) {
-            AddInventoryItemView(viewModel: viewModel)
+            AddInventoryItemView(viewModel: currentViewModel)
         }
         .sheet(item: $selectedItem) { item in
-            InventoryItemDetailView(item: item, viewModel: viewModel)
+            InventoryItemDetailView(item: item, viewModel: currentViewModel)
         }
     }
 }
@@ -356,14 +371,18 @@ struct InventoryRowView: View {
     
     var body: some View {
         HStack(spacing: 12) {
-            // Category Icon
+            // Equipment Image or Category Icon
             VStack {
-                Image(systemName: categoryIcon)
-                    .font(.title2)
-                    .foregroundColor(categoryColor)
-                    .frame(width: 40, height: 40)
-                    .background(categoryColor.opacity(0.1))
-                    .cornerRadius(8)
+                if item.imageData != nil {
+                    EquipmentImageView(imageData: item.imageData, size: 40)
+                } else {
+                    Image(systemName: categoryIcon)
+                        .font(.title2)
+                        .foregroundColor(categoryColor)
+                        .frame(width: 40, height: 40)
+                        .background(categoryColor.opacity(0.1))
+                        .cornerRadius(8)
+                }
                 
                 Spacer()
             }
@@ -411,32 +430,25 @@ struct InventoryRowView: View {
             }
         }
         .padding()
-        .background(Color(UIColor.systemBackground))
+        .background(Color.systemBackground)
         .cornerRadius(12)
         .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
     }
     
     private var categoryIcon: String {
-        switch item.category {
-        case "Solar Panels": return "sun.max.fill"
-        case "Inverters": return "powerplug.fill"
-        case "Batteries": return "battery.100"
-        case "Mounting": return "hammer.fill"
-        case "Electrical": return "bolt.fill"
-        case "Tools": return "wrench.and.screwdriver.fill"
-        default: return "cube.box.fill"
-        }
+        return item.category.icon
     }
     
     private var categoryColor: Color {
         switch item.category {
-        case "Solar Panels": return .orange
-        case "Inverters": return .blue
-        case "Batteries": return .green
-        case "Mounting": return .brown
-        case "Electrical": return .yellow
-        case "Tools": return .gray
-        default: return .primary
+        case .solarPanels: return .orange
+        case .inverters: return .blue
+        case .batteries: return .green
+        case .mounting: return .brown
+        case .electrical: return .yellow
+        case .tools: return .gray
+        case .monitoring: return .purple
+        case .safety: return .red
         }
     }
 }
@@ -508,7 +520,8 @@ struct AddInventoryItemView: View {
     @State private var minimumStock = ""
     @State private var unitPrice = ""
     @State private var description = ""
-    @State private var location = ""
+    @State private var selectedImage: PlatformImage?
+    @State private var showingImageSelection = false
     
     private let categories = ["Solar Panels", "Inverters", "Batteries", "Mounting", "Electrical", "Tools"]
     
@@ -529,17 +542,54 @@ struct AddInventoryItemView: View {
                 
                 Section("Inventory") {
                     TextField("Quantity", text: $quantity)
+                        #if os(iOS)
                         .keyboardType(.numberPad)
+                        #endif
                     TextField("Minimum Stock Level", text: $minimumStock)
+                        #if os(iOS)
                         .keyboardType(.numberPad)
+                        #endif
                     TextField("Unit Price", text: $unitPrice)
+                        #if os(iOS)
                         .keyboardType(.decimalPad)
+                        #endif
                 }
                 
                 Section("Additional Information") {
-                    TextField("Storage Location", text: $location)
                     TextField("Description", text: $description, axis: .vertical)
                         .lineLimit(3...6)
+                }
+                
+                Section("Photo") {
+                    HStack {
+                        EquipmentImageView(imageData: selectedImage?.compressedData(), size: 80)
+                        
+                        VStack(alignment: .leading, spacing: 8) {
+                            Button(action: {
+                                showingImageSelection = true
+                            }) {
+                                HStack {
+                                    Image(systemName: selectedImage == nil ? "camera.fill" : "photo.fill")
+                                    Text(selectedImage == nil ? "Add Photo" : "Change Photo")
+                                }
+                                .foregroundColor(.orange)
+                            }
+                            
+                            if selectedImage != nil {
+                                Button(action: {
+                                    selectedImage = nil
+                                }) {
+                                    HStack {
+                                        Image(systemName: "trash.fill")
+                                        Text("Remove Photo")
+                                    }
+                                    .foregroundColor(.red)
+                                }
+                            }
+                        }
+                        
+                        Spacer()
+                    }
                 }
             }
             .navigationTitle("Add Item")
@@ -559,6 +609,9 @@ struct AddInventoryItemView: View {
                     .sensoryFeedback(.success, trigger: !name.isEmpty)
                 }
             }
+            .sheet(isPresented: $showingImageSelection) {
+                ImageSelectionSheet(selectedImage: $selectedImage)
+            }
         }
     }
     
@@ -567,19 +620,36 @@ struct AddInventoryItemView: View {
         let minStock = Int(minimumStock) ?? 0
         let price = Double(unitPrice) ?? 0.0
         
-        let newItem = Equipment(
-            name: name,
-            category: category,
-            manufacturer: manufacturer,
-            model: model,
-            quantity: qty,
-            minimumStock: minStock,
-            unitPrice: price,
-            description: description,
-            location: location
-        )
+        let equipmentCategory: EquipmentCategory = {
+            switch category {
+            case "Solar Panels": return .solarPanels
+            case "Inverters": return .inverters
+            case "Batteries": return .batteries
+            case "Mounting": return .mounting
+            case "Electrical": return .electrical
+            case "Tools": return .tools
+            default: return .solarPanels
+            }
+        }()
         
-        viewModel.addEquipment(newItem)
+        // Set ViewModel properties
+        viewModel.newEquipmentName = name
+        viewModel.newEquipmentCategory = equipmentCategory
+        viewModel.newEquipmentBrand = manufacturer
+        viewModel.newEquipmentModel = model
+        viewModel.newEquipmentQuantity = qty
+        viewModel.newEquipmentUnitCost = price
+        viewModel.newEquipmentMinimumStock = minStock
+        viewModel.newEquipmentDescription = description
+        
+        // Set image data if available
+        if let image = selectedImage {
+            let resizedImage = image.resized(toWidth: 800) ?? image
+            viewModel.newEquipmentImageData = resizedImage.compressedData(quality: 0.8)
+        }
+        
+        // Add the equipment
+        viewModel.addEquipment()
         dismiss()
     }
 }
@@ -619,15 +689,17 @@ struct InventoryItemDetailView: View {
                 .padding()
             }
             .navigationTitle("Item Details")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItem(placement: .automatic) {
                     Button("Done") {
                         dismiss()
                     }
                 }
                 
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItem(placement: .automatic) {
                     Button("Edit") {
                         showingEditView = true
                     }
@@ -650,12 +722,16 @@ struct InventoryItemHeader: View {
     
     var body: some View {
         HStack(spacing: 16) {
-            Image(systemName: categoryIcon)
-                .font(.system(size: 40))
-                .foregroundColor(categoryColor)
-                .frame(width: 60, height: 60)
-                .background(categoryColor.opacity(0.1))
-                .cornerRadius(12)
+            if item.imageData != nil {
+                EquipmentImageView(imageData: item.imageData, size: 60)
+            } else {
+                Image(systemName: categoryIcon)
+                    .font(.system(size: 40))
+                    .foregroundColor(categoryColor)
+                    .frame(width: 60, height: 60)
+                    .background(categoryColor.opacity(0.1))
+                    .cornerRadius(12)
+            }
             
             VStack(alignment: .leading, spacing: 4) {
                 Text(item.name)
@@ -668,7 +744,7 @@ struct InventoryItemHeader: View {
                         .foregroundColor(.secondary)
                 }
                 
-                Text(item.category)
+                Text(item.category.rawValue)
                     .font(.caption)
                     .fontWeight(.medium)
                     .foregroundColor(categoryColor)
@@ -683,26 +759,19 @@ struct InventoryItemHeader: View {
     }
     
     private var categoryIcon: String {
-        switch item.category {
-        case "Solar Panels": return "sun.max.fill"
-        case "Inverters": return "powerplug.fill"
-        case "Batteries": return "battery.100"
-        case "Mounting": return "hammer.fill"
-        case "Electrical": return "bolt.fill"
-        case "Tools": return "wrench.and.screwdriver.fill"
-        default: return "cube.box.fill"
-        }
+        return item.category.icon
     }
     
     private var categoryColor: Color {
         switch item.category {
-        case "Solar Panels": return .orange
-        case "Inverters": return .blue
-        case "Batteries": return .green
-        case "Mounting": return .brown
-        case "Electrical": return .yellow
-        case "Tools": return .gray
-        default: return .primary
+        case .solarPanels: return .orange
+        case .inverters: return .blue
+        case .batteries: return .green
+        case .mounting: return .brown
+        case .electrical: return .yellow
+        case .tools: return .gray
+        case .monitoring: return .purple
+        case .safety: return .red
         }
     }
 }
@@ -739,7 +808,7 @@ struct InventoryStockSection: View {
                 }
             }
             .padding()
-            .background(Color(UIColor.systemGray6))
+            .background(Color.systemGray6)
             .cornerRadius(12)
             
             if item.quantity <= item.minimumStock {
@@ -800,25 +869,22 @@ struct InventoryDetailsSection: View {
                     DetailRow(label: "Model", value: item.model)
                 }
                 
-                if !item.location.isEmpty {
-                    DetailRow(label: "Location", value: item.location)
-                }
                 
-                if !item.description.isEmpty {
+                if !item.equipmentDescription.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Description")
                             .font(.subheadline)
                             .fontWeight(.medium)
                             .foregroundColor(.secondary)
                         
-                        Text(item.description)
+                        Text(item.equipmentDescription)
                             .font(.body)
                             .foregroundColor(.primary)
                     }
                 }
             }
             .padding()
-            .background(Color(UIColor.systemGray6))
+            .background(Color.systemGray6)
             .cornerRadius(12)
         }
     }
@@ -879,7 +945,7 @@ struct InventoryFinancialSection: View {
                 }
             }
             .padding()
-            .background(Color(UIColor.systemGray6))
+            .background(Color.systemGray6)
             .cornerRadius(12)
         }
     }
@@ -992,7 +1058,9 @@ struct StockAdjustmentView: View {
                     .pickerStyle(SegmentedPickerStyle())
                     
                     TextField("Quantity", text: $quantity)
+                        #if os(iOS)
                         .keyboardType(.numberPad)
+                        #endif
                     
                     TextField("Reason (optional)", text: $reason)
                 }
@@ -1063,7 +1131,8 @@ struct EditInventoryItemView: View {
     @State private var minimumStock: String
     @State private var unitPrice: String
     @State private var description: String
-    @State private var location: String
+    @State private var selectedImage: PlatformImage?
+    @State private var showingImageSelection = false
     
     private let categories = ["Solar Panels", "Inverters", "Batteries", "Mounting", "Electrical", "Tools"]
     
@@ -1073,11 +1142,13 @@ struct EditInventoryItemView: View {
         self._name = State(initialValue: item.name)
         self._manufacturer = State(initialValue: item.manufacturer)
         self._model = State(initialValue: item.model)
-        self._category = State(initialValue: item.category)
+        self._category = State(initialValue: item.category.rawValue)
         self._minimumStock = State(initialValue: String(item.minimumStock))
         self._unitPrice = State(initialValue: String(item.unitPrice))
-        self._description = State(initialValue: item.description)
-        self._location = State(initialValue: item.location)
+        self._description = State(initialValue: item.equipmentDescription)
+        if let imageData = item.imageData {
+            self._selectedImage = State(initialValue: PlatformImage(data: imageData))
+        }
     }
     
     var body: some View {
@@ -1097,15 +1168,50 @@ struct EditInventoryItemView: View {
                 
                 Section("Inventory Settings") {
                     TextField("Minimum Stock Level", text: $minimumStock)
+                        #if os(iOS)
                         .keyboardType(.numberPad)
+                        #endif
                     TextField("Unit Price", text: $unitPrice)
+                        #if os(iOS)
                         .keyboardType(.decimalPad)
+                        #endif
                 }
                 
                 Section("Additional Information") {
-                    TextField("Storage Location", text: $location)
                     TextField("Description", text: $description, axis: .vertical)
                         .lineLimit(3...6)
+                }
+                
+                Section("Photo") {
+                    HStack {
+                        EquipmentImageView(imageData: selectedImage?.compressedData(), size: 80)
+                        
+                        VStack(alignment: .leading, spacing: 8) {
+                            Button(action: {
+                                showingImageSelection = true
+                            }) {
+                                HStack {
+                                    Image(systemName: selectedImage == nil ? "camera.fill" : "photo.fill")
+                                    Text(selectedImage == nil ? "Add Photo" : "Change Photo")
+                                }
+                                .foregroundColor(.orange)
+                            }
+                            
+                            if selectedImage != nil {
+                                Button(action: {
+                                    selectedImage = nil
+                                }) {
+                                    HStack {
+                                        Image(systemName: "trash.fill")
+                                        Text("Remove Photo")
+                                    }
+                                    .foregroundColor(.red)
+                                }
+                            }
+                        }
+                        
+                        Spacer()
+                    }
                 }
             }
             .navigationTitle("Edit Item")
@@ -1124,6 +1230,9 @@ struct EditInventoryItemView: View {
                     .disabled(name.isEmpty)
                 }
             }
+            .sheet(isPresented: $showingImageSelection) {
+                ImageSelectionSheet(selectedImage: $selectedImage)
+            }
         }
     }
     
@@ -1131,7 +1240,10 @@ struct EditInventoryItemView: View {
         let minStock = Int(minimumStock) ?? 0
         let price = Double(unitPrice) ?? 0.0
         
-        viewModel.updateEquipment(
+        // Update image data if changed
+        let imageData = selectedImage?.resized(toWidth: 800)?.compressedData(quality: 0.8)
+        
+        viewModel.updateEquipmentWithImage(
             item,
             name: name,
             manufacturer: manufacturer,
@@ -1140,14 +1252,165 @@ struct EditInventoryItemView: View {
             minimumStock: minStock,
             unitPrice: price,
             description: description,
-            location: location
+            imageData: imageData
         )
         
         dismiss()
     }
 }
 
-#Preview {
-    InventoryListView()
-        .modelContainer(for: [Equipment.self])
+// MARK: - Cross-Platform Image Selection Sheet
+
+struct ImageSelectionSheet: View {
+    @Binding var selectedImage: PlatformImage?
+    @Environment(\.dismiss) private var dismiss
+    @State private var showingPhotoLibrary = false
+    @State private var showingCamera = false
+    
+    var body: some View {
+        NavigationView {
+            VStack(spacing: 20) {
+                Text("Add Photo")
+                    .font(.title2)
+                    .fontWeight(.semibold)
+                    .padding(.top, 20)
+                
+                VStack(spacing: 16) {
+                    #if os(iOS)
+                    Button(action: {
+                        showingCamera = true
+                    }) {
+                        HStack {
+                            Image(systemName: "camera.fill")
+                                .font(.title2)
+                                .foregroundColor(.white)
+                            
+                            Text("Take Photo")
+                                .font(.headline)
+                                .foregroundColor(.white)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color.blue)
+                        .cornerRadius(12)
+                    }
+                    .disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
+                    #endif
+                    
+                    Button(action: {
+                        showingPhotoLibrary = true
+                    }) {
+                        HStack {
+                            Image(systemName: "photo.fill")
+                                .font(.title2)
+                                .foregroundColor(.white)
+                            
+                            Text("Choose from Library")
+                                .font(.headline)
+                                .foregroundColor(.white)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color.orange)
+                        .cornerRadius(12)
+                    }
+                    
+                    if selectedImage != nil {
+                        Button(action: {
+                            selectedImage = nil
+                            dismiss()
+                        }) {
+                            HStack {
+                                Image(systemName: "trash.fill")
+                                    .font(.title2)
+                                    .foregroundColor(.white)
+                                
+                                Text("Remove Photo")
+                                    .font(.headline)
+                                    .foregroundColor(.white)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(Color.red)
+                            .cornerRadius(12)
+                        }
+                    }
+                }
+                .padding(.horizontal, 20)
+                
+                Spacer()
+            }
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .automatic) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+            }
+        }
+        #if os(iOS)
+        .sheet(isPresented: $showingPhotoLibrary) {
+            ImagePicker(image: $selectedImage)
+        }
+        .sheet(isPresented: $showingCamera) {
+            CameraImagePicker(image: $selectedImage)
+        }
+        #elseif os(macOS)
+        .sheet(isPresented: $showingPhotoLibrary) {
+            CrossPlatformImagePicker(image: $selectedImage, isPresented: $showingPhotoLibrary)
+        }
+        #endif
+        .onChange(of: selectedImage) { _, _ in
+            if selectedImage != nil {
+                dismiss()
+            }
+        }
+    }
 }
+
+#Preview {
+    let container = try! ModelContainer(for: Equipment.self)
+    let viewModelContainer = ViewModelContainer(modelContext: container.mainContext)
+    
+    return InventoryListView()
+        .modelContainer(container)
+        .environment(\.viewModelContainer, viewModelContainer)
+}
+
+// MARK: - Cross-Platform Image Extensions
+
+extension PlatformImage {
+    func compressedData(quality: CGFloat = 0.8) -> Data? {
+        #if os(iOS)
+        return self.jpegData(compressionQuality: quality)
+        #elseif os(macOS)
+        guard let cgImage = self.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+        let bitmapRep = NSBitmapImageRep(cgImage: cgImage)
+        return bitmapRep.representation(using: .jpeg, properties: [.compressionFactor: quality])
+        #endif
+    }
+    
+    func resized(toWidth width: CGFloat) -> PlatformImage? {
+        #if os(iOS)
+        let canvasSize = CGSize(width: width, height: CGFloat(ceil(width/size.width * size.height)))
+        UIGraphicsBeginImageContextWithOptions(canvasSize, false, scale)
+        defer { UIGraphicsEndImageContext() }
+        draw(in: CGRect(origin: .zero, size: canvasSize))
+        return UIGraphicsGetImageFromCurrentImageContext()
+        #elseif os(macOS)
+        let ratio = width / self.size.width
+        let newSize = CGSize(width: width, height: self.size.height * ratio)
+        let newImage = NSImage(size: newSize)
+        newImage.lockFocus()
+        draw(in: NSRect(origin: .zero, size: newSize),
+             from: NSRect(origin: .zero, size: self.size),
+             operation: .copy,
+             fraction: 1.0)
+        newImage.unlockFocus()
+        return newImage
+        #endif
+    }
+}
+
+

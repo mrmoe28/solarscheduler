@@ -4,6 +4,7 @@ import SwiftData
 @Observable
 class ViewModelContainer {
     private let dataService: DataService
+    private let userSession: UserSession
     
     // ViewModels
     let jobsViewModel: JobsViewModel
@@ -14,13 +15,17 @@ class ViewModelContainer {
     
     init(modelContext: ModelContext) {
         self.dataService = DataService(modelContext: modelContext)
+        self.userSession = UserSession.shared
         
-        // Initialize all ViewModels with the shared DataService
-        self.jobsViewModel = JobsViewModel(dataService: dataService)
-        self.customersViewModel = CustomersViewModel(dataService: dataService)
-        self.equipmentViewModel = EquipmentViewModel(dataService: dataService)
-        self.installationsViewModel = InstallationsViewModel(dataService: dataService)
-        self.dashboardViewModel = DashboardViewModel(dataService: dataService)
+        // Configure UserSession with ModelContext
+        userSession.configure(with: modelContext)
+        
+        // Initialize all ViewModels with the shared DataService and UserSession
+        self.jobsViewModel = JobsViewModel(dataService: dataService, userSession: userSession)
+        self.customersViewModel = CustomersViewModel(dataService: dataService, userSession: userSession)
+        self.equipmentViewModel = EquipmentViewModel(dataService: dataService, userSession: userSession)
+        self.installationsViewModel = InstallationsViewModel(dataService: dataService, userSession: userSession)
+        self.dashboardViewModel = DashboardViewModel(dataService: dataService, userSession: userSession)
     }
 }
 
